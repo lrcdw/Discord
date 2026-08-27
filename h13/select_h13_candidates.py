@@ -101,6 +101,17 @@ def main():
     if not manifest:
         raise SystemExit("EMPTY_DISCOVERY_MANIFEST")
 
+    label_map={
+        "premier_league":"Premier League",
+        "championship":"Championship",
+        "bundesliga":"Bundesliga",
+        "laliga":"LaLiga",
+    }
+    for r in manifest:
+        raw_label=r["competition"]
+        r["competition"]=label_map.get(raw_label, raw_label)
+
+    # Combine multiple group calls belonging to the same fixed discovery fixture.
     hist_by_comp_book={}
     raw_hashes=[]
     for r in manifest:
@@ -122,7 +133,7 @@ def main():
         for book in sorted(allowed):
             hist=hist_by_comp_book.get((comp,book),{"bookmakers":{}})
             for fam in FAMILIES:
-                two_sided=0; target=0; with_ts=0
+                two_sided=0; target=0; with_ts=0; valid_side_snapshots=0
                 line_details=[]
                 for m in byfam[fam]:
                     oa=snaps(hist,book,m["market_id"],m["over_outcome_id"])
@@ -133,6 +144,7 @@ def main():
                     with_ts += len(ots)+len(uts)
                     if ots and uts:
                         two_sided += 1
+                        valid_side_snapshots += len(ots)+len(uts)
                         line_details.append(m["line"])
                 stats.append({
                     "competition":comp,
