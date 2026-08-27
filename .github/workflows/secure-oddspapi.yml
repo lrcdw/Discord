@@ -28,7 +28,7 @@ jobs:
           openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
           openssl pkey -in /tmp/private.pem -pubout -out secure_exchange/public_key.pem >/dev/null 2>&1
           printf '%s\n' "$SESSION" > secure_exchange/session.txt
-          rm -f secure_exchange/ciphertext.b64
+          git rm -f --ignore-unmatch secure_exchange/ciphertext.b64 secure_exchange/ciphertext.hex >/dev/null 2>&1 || true
           git add secure_exchange/public_key.pem secure_exchange/session.txt
           git commit -m "Publish ephemeral audit public key $SESSION"
           git push origin HEAD:master
@@ -36,68 +36,89 @@ jobs:
           echo 'Ephemeral public key published; polling for encrypted credential.'
           for i in $(seq 1 90); do
             git pull --rebase origin master >/dev/null 2>&1 || true
-            if [ -s secure_exchange/ciphertext.b64 ]; then break; fi
+            if [ -s secure_exchange/ciphertext.hex ]; then break; fi
             sleep 3
           done
-          test -s secure_exchange/ciphertext.b64
-          base64 -d secure_exchange/ciphertext.b64 > /tmp/secret.enc
+          test -s secure_exchange/ciphertext.hex
+          tr -d '\r\n ' < secure_exchange/ciphertext.hex | xxd -r -p > /tmp/secret.enc
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
           openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
           chmod 600 /tmp/api_key.txt
 
           python - <<'PY'
-          import json, pathlib, requests, hashlib
+          import json, pathlib, requests
           BASE='https://api.oddspapi.io/v4'
           key=pathlib.Path('/tmp/api_key.txt').read_text().strip()
           if not key: raise SystemExit('EMPTY_KEY')
           s=requests.Session()
+
           def get(ep, **params):
               params['apiKey']=key
               r=s.get(BASE+ep,params=params,timeout=60)
               try: data=r.json()
               except Exception: data={'_non_json':r.text[:2000]}
               if r.status_code>=400:
-                  raise RuntimeError(f'{ep} HTTP {r.status_code}: {str(data)[:500]}')
+                  safe={'endpoint':ep,'status':r.status_code,'response_type':type(data).__name__}
+                  if isinstance(data,dict):
+                      safe['keys']=sorted(data.keys())
+                      safe['message']=data.get('message') or data.get('error')
+                  raise RuntimeError(json.dumps(safe))
               return data
 
+          def seq(data, *keys):
+              if isinstance(data,list): return data
+              if isinstance(data,dict):
+                  for k in keys:
+                      v=data.get(k)
+                      if isinstance(v,list): return v
+              return []
+
           account=get('/account')
-          active=[x for x in account.get('subscriptions',[]) if x.get('is_active')]
+          active=[]
+          if isinstance(account,dict):
+              active=[x for x in (account.get('subscriptions') or []) if isinstance(x,dict) and x.get('is_active')]
           acct={
               'auth_ok':True,
               'active_subscription_count':len(active),
               'subscriptions':[{
                   'price':x.get('price'),'request_limit':x.get('request_limit'),
                   'request_count':x.get('request_count'),'sport_ids':x.get('sport_ids'),
-                  'bookmakers':sorted((x.get('bookmakers') or {}).keys()),
+                  'bookmakers':sorted((x.get('bookmakers') or {}).keys()) if isinstance(x.get('bookmakers'),dict) else x.get('bookmakers'),
                   'websocket_access':x.get('websocket_access')
               } for x in active]
           }
-          markets=get('/markets',language='en')
+          markets_raw=get('/markets',language='en')
+          markets=seq(markets_raw,'markets','data','results')
           corner=[]
           for m in markets:
-              text=' '.join(str(m.get(k) or '') for k in ('marketName','marketNameShort','marketType','period')).lower()
+              if not isinstance(m,dict): continue
+              text=' '.join(str(m.get(k) or '') for k in ('marketName','marketNameShort','marketType','period','name','slug')).lower()
               if 'corner' in text:
                   corner.append(m)
-          tournaments=get('/tournaments',sportId=10,language='en')
+          tournaments_raw=get('/tournaments',sportId=10,language='en')
+          tournaments=seq(tournaments_raw,'tournaments','data','results')
           targets=[]
-          wanted=[('england','premier'),('england','championship'),('germany','bundesliga'),('spain','laliga')]
+          wanted=('premier league','championship','bundesliga','la liga')
           for t in tournaments:
-              hay=' '.join(str(t.get(k) or '') for k in ('tournamentName','tournamentSlug','categoryName','categorySlug')).lower()
-              for country,name in wanted:
-                  if country in hay and name in hay:
-                      targets.append(t); break
+              if not isinstance(t,dict): continue
+              hay=' '.join(str(t.get(k) or '') for k in ('tournamentName','tournamentSlug','categoryName','categorySlug','name','slug')).lower()
+              if any(w in hay for w in wanted): targets.append(t)
           out={
               'account':acct,
+              'markets_response_type':type(markets_raw).__name__,
+              'market_count':len(markets),
               'corner_market_count':len(corner),
               'corner_markets':corner,
+              'tournaments_response_type':type(tournaments_raw).__name__,
               'target_tournaments':targets,
               'all_tournament_count':len(tournaments),
           }
           pathlib.Path('oddspapi_discovery.json').write_text(json.dumps(out,indent=2,ensure_ascii=False),encoding='utf-8')
           print('AUTH_OK',acct['auth_ok'])
           print('ACTIVE_SUBSCRIPTIONS',len(active))
-          print('CORNER_MARKETS',len(corner))
-          print('TARGET_TOURNAMENTS',[(x.get('tournamentId'),x.get('tournamentName'),x.get('categoryName')) for x in targets])
+          print('MARKETS',len(markets),'CORNER_MARKETS',len(corner))
+          print('TOURNAMENTS',len(tournaments),'TARGETS',len(targets))
           PY
           rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem
       - name: Upload sanitized discovery
