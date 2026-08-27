@@ -1,0 +1,47 @@
+{
+  "selection_protocol_version": "ODDSPAPI_H_1.3_PRE_REGISTERED",
+  "protocol_sha256": "63cdc0b6151082cae262dded74b397fd6872d97c162731153f8b50bf2316a068",
+  "market_catalog_sha256": "89372de065291dc5d45768643d27a62cb635fa998b43a0d8318bbbc6cc26c6b0",
+  "discovery_manifest_sha256": "bf6d3e943e6bcb9cdd90d095954660993cdb8de88fb6483955d737fb876cd930",
+  "selection_script_sha256": "6d34e0514910f1a5fb6a904ed2a8883eae67872973d0e511c4060ebf8ec167f8",
+  "candidate_selection_csv_sha256": "ca7e5c712e9fb30ef0f616005fbf6a0d827f350c07db82e7f206e805bacb3594",
+  "discovery_book_stats_csv_sha256": "815f5e91567adf4e7085cf6ff1513f6fee5d1c08ffd289a02778626ddd62b917",
+  "raw_files": [
+    {"competition":"Premier League","file":"raw/premier_league_g1_id1000001761301157.json.gz","sha256_uncompressed":"2f2cd0afbab4f4de525760a8d3980b01e764dade4329eba9bf09a6491a342ae6"},
+    {"competition":"Premier League","file":"raw/premier_league_g2_id1000001761301157.json.gz","sha256_uncompressed":"3b490a88560f238eac61f3857e65e82d985a753c66fece7dafe924002c6aca8e"},
+    {"competition":"Premier League","file":"raw/premier_league_g3_id1000001761301157.json.gz","sha256_uncompressed":"870ba4253c22ea7b9efa362aa0a81b926f5468de97e7ce0d7b62c0c7c00a1835"},
+    {"competition":"Championship","file":"raw/championship_g1_id1000001861491247.json.gz","sha256_uncompressed":"ce98e13a6d31d9d33d9fad55f4d4c15a146d612baf8441db7fbac20d99673bb5"},
+    {"competition":"Championship","file":"raw/championship_g2_id1000001861491247.json.gz","sha256_uncompressed":"0ef0a8e17470e0e551057fbc388b6c955700a530290d2c2d9be12902c72563bd"},
+    {"competition":"Championship","file":"raw/championship_g3_id1000001861491247.json.gz","sha256_uncompressed":"7c9f698d52a17f2a1e25ed4eab97047cb3171a2c85659a336b9d6422063138a0"},
+    {"competition":"Bundesliga","file":"raw/bundesliga_g1_id1000003561514124.json.gz","sha256_uncompressed":"c90f95790ab1b74277f8ac32c4fb98a8af7d3658163628583229195392a185dd"},
+    {"competition":"Bundesliga","file":"raw/bundesliga_g2_id1000003561514124.json.gz","sha256_uncompressed":"c7d34e95678ba89c20b7153c6ab29811598ec89745f3d0e314428e030614469e"},
+    {"competition":"Bundesliga","file":"raw/bundesliga_g3_id1000003561514124.json.gz","sha256_uncompressed":"db124888d5dba617cdf0942b6a01fbae0640f54a12728640584aad7daa30f507"},
+    {"competition":"LaLiga","file":"raw/laliga_g1_id1000000861624592.json.gz","sha256_uncompressed":"a45dad28b030886aee418b4c101c8269e21217e5de3f7caf901cf1156f6cc904"},
+    {"competition":"LaLiga","file":"raw/laliga_g2_id1000000861624592.json.gz","sha256_uncompressed":"a522bf4f985c3524304f997ab608a3d57fce4011783b0d50b0d055c5f1d6a087"},
+    {"competition":"LaLiga","file":"raw/laliga_g3_id1000000861624592.json.gz","sha256_uncompressed":"b79f6aadd9a42c29387a9151c9588aca2978a70454b8a735c00523dc3ada8ae2"}
+  ],
+  "selected": {
+    "Bundesliga": {
+      "TOTAL_CORNERS": ["betrivers","borgata"],
+      "HOME_TEAM_TOTAL_CORNERS": ["betrivers","borgata"],
+      "AWAY_TEAM_TOTAL_CORNERS": ["betrivers","borgata"]
+    },
+    "Championship": {
+      "TOTAL_CORNERS": ["ballybet","betmgm"],
+      "HOME_TEAM_TOTAL_CORNERS": ["ballybet","betmgm"],
+      "AWAY_TEAM_TOTAL_CORNERS": ["ballybet","betmgm"]
+    },
+    "LaLiga": {
+      "TOTAL_CORNERS": ["ballybet","draftkings","borgata"],
+      "HOME_TEAM_TOTAL_CORNERS": ["ballybet","borgata","draftkings"],
+      "AWAY_TEAM_TOTAL_CORNERS": ["ballybet","borgata","draftkings"]
+    },
+    "Premier League": {
+      "TOTAL_CORNERS": ["ballybet","borgata"],
+      "HOME_TEAM_TOTAL_CORNERS": ["betparx"],
+      "AWAY_TEAM_TOTAL_CORNERS": ["betparx","betmgm"]
+    }
+  },
+  "manual_override_used": false,
+  "holdout_observed_before_freeze": false
+}
