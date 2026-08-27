@@ -2,6 +2,10 @@ name: H1.4 The Odds API Frozen Holdout
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'h14/trigger_h14.txt'
 
 permissions:
   contents: read
