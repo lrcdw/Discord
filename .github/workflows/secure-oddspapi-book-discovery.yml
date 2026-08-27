@@ -1,0 +1,111 @@
+name: Secure OddsPapi Corner Book Discovery
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-oddspapi-book-discovery.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate ephemeral public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out public_key.pem >/dev/null 2>&1
+          echo "RUN_ID=${GITHUB_RUN_ID}" > exchange_info.txt
+      - name: Upload public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: book-discovery-public-key
+          path: |
+            public_key.pem
+            exchange_info.txt
+      - name: Discover corner bookmakers on fixed April samples
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CIPHER_PATH="secure_exchange_bookdiscovery/${GITHUB_RUN_ID}.hex"
+          for i in $(seq 1 180); do
+            if gh api "repos/${GITHUB_REPOSITORY}/contents/${CIPHER_PATH}" --jq .content >/tmp/ciphertext.b64 2>/dev/null; then
+              base64 -d /tmp/ciphertext.b64 >/tmp/ciphertext.hex
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/ciphertext.hex
+          tr -d '\r\n ' </tmp/ciphertext.hex | xxd -r -p >/tmp/secret.enc
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          test -s /tmp/api_key.txt
+          python - <<'PY'
+          from pathlib import Path
+          import requests,gzip,hashlib,csv,json,time
+          key=Path('/tmp/api_key.txt').read_text().strip()
+          out=Path('book_discovery'); raw=out/'raw'; raw.mkdir(parents=True,exist_ok=True)
+          samples={
+            'premier_league':'id1000001761301157',
+            'championship':'id1000001861491247',
+            'bundesliga':'id1000003561514124',
+            'laliga':'id1000000861624592',
+          }
+          groups={
+            'g1':'betparx,ballybet,betrivers',
+            'g2':'betmgm,borgata,hardrockbet',
+            'g3':'fourwinds,polymarket,draftkings',
+            'g4':'fanduel,caesars,williamhill',
+          }
+          sess=requests.Session(); manifest=[]; retries=0
+          def get(fid,books):
+            global retries
+            params={'apiKey':key,'fixtureId':fid,'bookmakers':books}
+            last=None
+            for attempt in range(8):
+              r=sess.get('https://api.oddspapi.io/v4/historical-odds',params=params,timeout=90); last=r
+              print('HTTP',fid,books,r.status_code,'attempt',attempt+1,flush=True)
+              if r.status_code==200: r.json(); return r.content
+              if r.status_code==429:
+                retries+=1; ms=5000
+                try:
+                  p=r.json(); e=p.get('error') if isinstance(p,dict) else None
+                  if isinstance(e,dict) and e.get('retryMs') is not None: ms=float(e['retryMs'])
+                except Exception: pass
+                time.sleep(max(.5,ms/1000+.4)); continue
+              if 500 <= r.status_code < 600:
+                retries+=1; time.sleep(min(2**attempt,15)); continue
+              try: msg=str(r.json())[:300]
+              except Exception: msg='NON_JSON'
+              raise SystemExit(f'HTTP_FAIL_{r.status_code}:{msg}')
+            raise SystemExit(f'RETRY_EXHAUSTED_{last.status_code}')
+          for label,fid in samples.items():
+            for g,books in groups.items():
+              body=get(fid,books)
+              p=raw/f'{label}_{g}_{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
+              manifest.append({'competition':label,'group':g,'bookmakers':books,'fixture_id':fid,'file':str(p.relative_to(out)),'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'bytes':len(body)})
+              time.sleep(.2)
+          with (out/'manifest.csv').open('w',newline='',encoding='utf-8') as f:
+            w=csv.DictWriter(f,fieldnames=manifest[0].keys()); w.writeheader(); w.writerows(manifest)
+          (out/'summary.json').write_text(json.dumps({'calls':len(manifest),'retries':retries,'credential_persisted':False,'discovery_only':True},indent=2),encoding='utf-8')
+          secret=key.encode()
+          for p in out.rglob('*'):
+            if p.is_file() and secret in p.read_bytes(): raise SystemExit('CREDENTIAL_LEAK:'+str(p))
+          print('DISCOVERY_COMPLETE',len(manifest),flush=True)
+          PY
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext.b64
+      - name: Upload discovery
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-book-discovery
+          path: book_discovery
