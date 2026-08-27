@@ -1,7 +1,9 @@
 {
   "selection_protocol_version": "ODDSPAPI_H_1.3_PRE_REGISTERED",
   "protocol_sha256": "63cdc0b6151082cae262dded74b397fd6872d97c162731153f8b50bf2316a068",
-  "market_catalog_sha256": "89372de065291dc5d45768643d27a62cb635fa998b43a0d8318bbbc6cc26c6b0",
+  "market_catalog_original_crlf_sha256": "89372de065291dc5d45768643d27a62cb635fa998b43a0d8318bbbc6cc26c6b0",
+  "market_catalog_runtime_lf_sha256": "e5a94b1eb282c7df2a547ac3c0425f2016cca10d183b278daeea62679c267a56",
+  "market_catalog_line_ending_normalization_semantics_verified": true,
   "discovery_manifest_sha256": "bf6d3e943e6bcb9cdd90d095954660993cdb8de88fb6483955d737fb876cd930",
   "selection_script_sha256": "6d34e0514910f1a5fb6a904ed2a8883eae67872973d0e511c4060ebf8ec167f8",
   "candidate_selection_csv_sha256": "d752d11a8e71d16c6a347e41a9f3ed7aec6c0b99b29d337680c6b961a7089178",
