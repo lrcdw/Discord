@@ -1,0 +1,111 @@
+{
+  "protocol_version": "ODDSPAPI_H_1.3_PRE_REGISTERED",
+  "operating_mode": "SHADOW",
+  "purpose": "Independent temporal holdout after H.1.2 failed and April discovery identified alternative corner feeds.",
+  "discovery_data": {
+    "period_role": "DISCOVERY_ONLY",
+    "month": "2026-04",
+    "fixed_fixture_ids": {
+      "Premier League": "id1000001761301157",
+      "Championship": "id1000001861491247",
+      "Bundesliga": "id1000003561514124",
+      "LaLiga": "id1000000861624592"
+    },
+    "allowed_candidate_slugs": [
+      "betparx",
+      "ballybet",
+      "betrivers",
+      "betmgm",
+      "borgata",
+      "hardrockbet",
+      "fourwinds",
+      "draftkings",
+      "fanduel"
+    ],
+    "polymarket_excluded_from_production_selection": true,
+    "polymarket_exclusion_reason": "Different outcomeId query semantics and exchange-depth/liquidity requirements; retained for research only."
+  },
+  "candidate_selection": {
+    "automatic": true,
+    "manual_override_prohibited": true,
+    "required_market_families": [
+      "TOTAL_CORNERS",
+      "HOME_TEAM_TOTAL_CORNERS",
+      "AWAY_TEAM_TOTAL_CORNERS"
+    ],
+    "eligible_book_rule": "At least one half-point line in the competition/market discovery fixture with both Over and Under having >=1 timestamped snapshot.",
+    "correlation_groups": {
+      "PARX_RIVERS_RETAIL": [
+        "betparx",
+        "ballybet",
+        "betrivers",
+        "fourwinds"
+      ],
+      "MGM": [
+        "betmgm",
+        "borgata"
+      ],
+      "HARDROCK": [
+        "hardrockbet"
+      ],
+      "DRAFTKINGS": [
+        "draftkings"
+      ],
+      "FANDUEL": [
+        "fanduel"
+      ]
+    },
+    "representative_rule": "Within each correlation group, choose the slug with highest two-sided line count; tie -> highest target snapshot count; tie -> lexicographically smallest slug.",
+    "group_ranking_rule": "Rank group representatives by two-sided line count desc, target snapshot count desc, slug asc.",
+    "max_selected_bookmakers_per_competition_market": 3,
+    "zero_candidate_rule": "If no candidate survives for a competition/market, pre-mark that contract FAIL_SOURCE_COVERAGE and do not improvise a replacement."
+  },
+  "holdout": {
+    "period_start_utc": "2026-03-01T00:00:00Z",
+    "period_end_utc": "2026-03-31T23:59:59Z",
+    "competitions": {
+      "Premier League": 17,
+      "Championship": 18,
+      "Bundesliga": 35,
+      "LaLiga": 8
+    },
+    "fixture_eligibility": "All completed men's full-time fixtures in the target tournament with kickoff_utc inside the holdout window; postponed/cancelled/abandoned excluded by status, never by odds availability.",
+    "minimum_fixtures_per_competition": 25
+  },
+  "market_contract": {
+    "markets": [
+      "TOTAL_CORNERS",
+      "HOME_TEAM_TOTAL_CORNERS",
+      "AWAY_TEAM_TOTAL_CORNERS"
+    ],
+    "period": "FULL_MATCH",
+    "pregame_only": true,
+    "half_point_lines_only": true,
+    "horizons_minutes": [
+      60,
+      30,
+      15
+    ],
+    "max_odds_age_seconds": 300,
+    "pair_reconstruction": "For each side independently, use the latest snapshot at or before prediction_as_of; both sides must be price>1, active is not False, timestamped, nonfuture, and each side age <=300 seconds.",
+    "cross_book_pairing_prohibited": true
+  },
+  "gates": {
+    "coverage_pass_rate": 0.9,
+    "coverage_partial_floor": 0.7,
+    "bookmaker_admission_min_rate_across_all_horizons": 0.8,
+    "timestamp_complete_rate_required": 1.0,
+    "duplicate_same_timestamp_different_price_allowed": false,
+    "competition_market_pass": "All three horizons PASS and at least one selected bookmaker admitted for the contract.",
+    "no_threshold_changes_after_holdout_observation": true
+  },
+  "closing": {
+    "measured_separately": true,
+    "definition": "Last valid identical-contract two-sided state strictly before kickoff.",
+    "not_a_primary_coverage_gate": true
+  },
+  "promotion": {
+    "H_final_pass_requires": "At least one competition/market contract PASS plus all infrastructure, temporal, raw-integrity, SQLite, test and restore gates PASS. Failed contracts remain explicitly out of domain.",
+    "step_I_allowed_only_after_H_final_review": true
+  }
+}
