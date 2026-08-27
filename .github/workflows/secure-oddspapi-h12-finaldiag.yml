@@ -67,30 +67,61 @@ jobs:
             'bundesliga':'id1000003561514124',
             'laliga':'id1000000861624592',
           }
-          sess=requests.Session(); manifest=[]
+          sess=requests.Session(); manifest=[]; retries_total=0
           def get(fid, books_marker, params_extra):
+              nonlocal_placeholder = None
+              global retries_total
               params={'apiKey':key,'fixtureId':fid}; params.update(params_extra)
-              r=sess.get('https://api.oddspapi.io/v4/historical-odds',params=params,timeout=90)
-              print('HTTP',fid,books_marker,r.status_code,flush=True)
-              if r.status_code!=200:
+              last=None
+              for attempt in range(8):
+                  r=sess.get('https://api.oddspapi.io/v4/historical-odds',params=params,timeout=90)
+                  last=r
+                  print('HTTP',fid,books_marker,r.status_code,'attempt',attempt+1,flush=True)
+                  if r.status_code==200:
+                      body=r.content; r.json(); return body
+                  if r.status_code==429:
+                      retries_total += 1
+                      retry_ms=4000
+                      try:
+                          payload=r.json()
+                          err=payload.get('error') if isinstance(payload,dict) else None
+                          if isinstance(err,dict) and err.get('retryMs') is not None:
+                              retry_ms=float(err['retryMs'])
+                          elif isinstance(payload,dict) and payload.get('retryMs') is not None:
+                              retry_ms=float(payload['retryMs'])
+                      except Exception:
+                          pass
+                      sleep_s=max(0.5,retry_ms/1000.0+0.35)
+                      print('RATE_LIMIT_SLEEP',round(sleep_s,3),flush=True)
+                      time.sleep(sleep_s)
+                      continue
+                  if 500 <= r.status_code < 600:
+                      retries_total += 1
+                      time.sleep(min(2**attempt,15))
+                      continue
                   try: msg=str(r.json())[:300]
                   except Exception: msg='NON_JSON'
                   raise SystemExit(f'HTTP_FAIL_{r.status_code}_{fid}_{books_marker}:{msg}')
-              body=r.content; r.json(); return body
+              try: msg=str(last.json())[:300]
+              except Exception: msg='NON_JSON'
+              raise SystemExit(f'RETRY_EXHAUSTED_{fid}_{books_marker}_{last.status_code}:{msg}')
           for fid in seven:
               body=get(fid,'benchmarks',{'bookmakers':'pinnacle,bet365,singbet'})
               p=raw/f'{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
               manifest.append({'kind':'seven','fixture_id':fid,'file':str(p.relative_to(out)),'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'bytes':len(body)})
+              time.sleep(0.15)
           for label,fid in samples.items():
               body=get(fid,'allbooks',{})
               p=diag/f'{label}_{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
               manifest.append({'kind':'allbooks','fixture_id':fid,'file':str(p.relative_to(out)),'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'bytes':len(body)})
+              time.sleep(0.15)
           with (out/'manifest.csv').open('w',newline='',encoding='utf-8') as f:
               w=csv.DictWriter(f,fieldnames=manifest[0].keys()); w.writeheader(); w.writerows(manifest)
+          (out/'summary.json').write_text(json.dumps({'files':len(manifest),'retries_total':retries_total,'credential_persisted':False},indent=2),encoding='utf-8')
           secret=key.encode()
           for p in out.rglob('*'):
               if p.is_file() and secret in p.read_bytes(): raise SystemExit('CREDENTIAL_LEAK:'+str(p))
-          print('FINALDIAG_COMPLETE',len(manifest),flush=True)
+          print('FINALDIAG_COMPLETE',len(manifest),'RETRIES',retries_total,flush=True)
           PY
           rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext.b64
       - name: Upload completion and diagnostics
