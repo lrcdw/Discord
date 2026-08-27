@@ -1,0 +1,58 @@
+name: Secure OddsPapi H12 Fixed
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/secure-oddspapi-h12-fixed.yml']
+permissions:
+  contents: write
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: Ephemeral exchange and frozen H12 census
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git config user.name corners-lab-runner
+          git config user.email corners-lab-runner@users.noreply.github.com
+          mkdir -p secure_exchange_h12
+          git rm -f --ignore-unmatch secure_exchange_h12/ciphertext.hex >/dev/null 2>&1 || true
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out secure_exchange_h12/public_key.pem >/dev/null 2>&1
+          printf '%s\n' "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > secure_exchange_h12/session.txt
+          git add secure_exchange_h12/public_key.pem secure_exchange_h12/session.txt
+          git commit -m "Publish ephemeral H12-fixed public key ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git push origin HEAD:master
+          for i in $(seq 1 120); do
+            git fetch origin master >/dev/null 2>&1 || true
+            if git cat-file -e origin/master:secure_exchange_h12/ciphertext.hex 2>/dev/null; then
+              git checkout origin/master -- secure_exchange_h12/ciphertext.hex
+              break
+            fi
+            sleep 3
+          done
+          test -s secure_exchange_h12/ciphertext.hex
+          tr -d '\r\n ' < secure_exchange_h12/ciphertext.hex | xxd -r -p > /tmp/secret.enc
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+          chmod 600 /tmp/api_key.txt
+          mkdir -p audit_input /tmp/frozen
+          gh api repos/${GITHUB_REPOSITORY}/actions/artifacts/9649446403/zip > /tmp/frozen.zip
+          unzip -q /tmp/frozen.zip -d /tmp/frozen
+          cp /tmp/frozen/eligible_fixtures.csv audit_input/
+          cp /tmp/frozen/market_catalog_target.csv audit_input/
+          python .github/scripts/h12_fixed.py
+          rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem
+      - name: Upload corrected H12 artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-H12-fixed
+          path: h12_output
+          if-no-files-found: error
