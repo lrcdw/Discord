@@ -4,8 +4,8 @@
   "market_catalog_sha256": "89372de065291dc5d45768643d27a62cb635fa998b43a0d8318bbbc6cc26c6b0",
   "discovery_manifest_sha256": "bf6d3e943e6bcb9cdd90d095954660993cdb8de88fb6483955d737fb876cd930",
   "selection_script_sha256": "6d34e0514910f1a5fb6a904ed2a8883eae67872973d0e511c4060ebf8ec167f8",
-  "candidate_selection_csv_sha256": "ca7e5c712e9fb30ef0f616005fbf6a0d827f350c07db82e7f206e805bacb3594",
-  "discovery_book_stats_csv_sha256": "815f5e91567adf4e7085cf6ff1513f6fee5d1c08ffd289a02778626ddd62b917",
+  "candidate_selection_csv_sha256": "d752d11a8e71d16c6a347e41a9f3ed7aec6c0b99b29d337680c6b961a7089178",
+  "discovery_book_stats_csv_sha256": "2681911c9455696275e74a245a22d670d03bb2d1eb69da375bceb1cf2905bc55",
   "raw_files": [
     {"competition":"Premier League","file":"raw/premier_league_g1_id1000001761301157.json.gz","sha256_uncompressed":"2f2cd0afbab4f4de525760a8d3980b01e764dade4329eba9bf09a6491a342ae6"},
     {"competition":"Premier League","file":"raw/premier_league_g2_id1000001761301157.json.gz","sha256_uncompressed":"3b490a88560f238eac61f3857e65e82d985a753c66fece7dafe924002c6aca8e"},
