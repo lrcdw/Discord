@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -24,7 +26,7 @@ jobs:
       - name: Execute frozen H1.4 holdout
         env:
           THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
-        run: python h14/run_h14_theoddsapi_v2.py
+        run: python h14/run_h14_theoddsapi_v3.py
       - name: Upload H1.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
