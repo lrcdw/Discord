@@ -41,7 +41,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          CIPHER_PATH="secure_exchange_h14/${GITHUB_RUN_ID}.hex"
+          CIPHER_PATH="secure_exchange_h14/${GITHUB_RUN_ID}.dec"
           FOUND=0
           for i in $(seq 1 300); do
             git fetch -q origin master
@@ -53,38 +53,36 @@ jobs:
             sleep 2
           done
           test "$FOUND" -eq 1
-          echo CIPHER_GIT_FOUND
+          echo CIPHER_DECIMAL_GIT_FOUND
           python - <<'PY'
           import re, subprocess
           from pathlib import Path
 
-          text=Path('/tmp/ciphertext_source.txt').read_text(encoding='utf-8',errors='ignore')
-          hexchars=''.join(re.findall(r'[0-9a-fA-F]', text))
-          print(f'HEXCHARS_TOTAL={len(hexchars)}')
-          if len(hexchars) < 768 or len(hexchars) > 900:
-              raise SystemExit('FAIL_CIPHER_HEX_LENGTH')
-
-          successes=[]
-          for start in range(len(hexchars)-768+1):
-              window=hexchars[start:start+768]
-              enc=bytes.fromhex(window)
-              p=subprocess.run([
-                  'openssl','pkeyutl','-decrypt',
-                  '-inkey','/tmp/private.pem',
-                  '-pkeyopt','rsa_padding_mode:oaep',
-                  '-pkeyopt','rsa_oaep_md:sha256',
-                  '-pkeyopt','rsa_mgf1_md:sha256'
-              ], input=enc, capture_output=True)
-              if p.returncode==0:
-                  plain=p.stdout
-                  if re.fullmatch(rb'[A-Za-z0-9_-]{20,128}', plain):
-                      successes.append((start, plain))
-
-          if len(successes)!=1:
-              raise SystemExit(f'FAIL_RSA_WINDOW_SUCCESS_COUNT={len(successes)}')
-          start,plain=successes[0]
+          text=Path('/tmp/ciphertext_source.txt').read_text(encoding='utf-8',errors='strict').strip()
+          tokens=[t.strip() for t in text.replace('\n',',').split(',') if t.strip()]
+          if len(tokens)!=384:
+              raise SystemExit(f'FAIL_CIPHER_BYTE_COUNT={len(tokens)}')
+          if not all(re.fullmatch(r'\d{1,3}', t) for t in tokens):
+              raise SystemExit('FAIL_CIPHER_TOKEN_FORMAT')
+          vals=[int(t) for t in tokens]
+          if not all(0 <= v <= 255 for v in vals):
+              raise SystemExit('FAIL_CIPHER_BYTE_RANGE')
+          enc=bytes(vals)
+          print(f'CIPHER_DECIMAL_OK BYTES={len(enc)}')
+          p=subprocess.run([
+              'openssl','pkeyutl','-decrypt',
+              '-inkey','/tmp/private.pem',
+              '-pkeyopt','rsa_padding_mode:oaep',
+              '-pkeyopt','rsa_oaep_md:sha256',
+              '-pkeyopt','rsa_mgf1_md:sha256'
+          ], input=enc, capture_output=True)
+          if p.returncode!=0:
+              raise SystemExit('FAIL_RSA_OAEP_DECRYPT')
+          plain=p.stdout
+          if not re.fullmatch(rb'[A-Za-z0-9_-]{20,128}', plain):
+              raise SystemExit('FAIL_DECRYPTED_KEY_FORMAT')
           Path('/tmp/api_key.txt').write_bytes(plain)
-          print(f'RSA_WINDOW_OK START={start} KEY_LEN={len(plain)}')
+          print(f'RSA_DECIMAL_OK KEY_LEN={len(plain)}')
           PY
           test -s /tmp/api_key.txt
           THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
