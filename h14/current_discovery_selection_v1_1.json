@@ -1,0 +1,54 @@
+{
+  "selection_version": "H14_CURRENT_DISCOVERY_SELECTION_1.1",
+  "protocol_family": "THEODDSAPI_H_1.4",
+  "created_date": "2026-08-27",
+  "historical_holdout_observed_before_freeze": false,
+  "discovery_role": "CURRENT_MARKET_SOURCE_DISCOVERY_ONLY",
+  "discovery_run_id": 33111975786,
+  "discovery_artifact": "h14-current-discovery-33111975786",
+  "discovery_artifact_sha256": "d6a9291d6609476b707b2d26d21ed23dadbea04d326318db29527ced8c8f8e4c",
+  "discovery_scope": {
+    "events_per_competition": 5,
+    "competitions": ["Premier League", "Championship", "Bundesliga", "LaLiga"],
+    "regions": ["us", "us2", "uk", "eu", "au"],
+    "markets": ["alternate_totals_corners", "alternate_team_totals_corners"],
+    "pair_requirement": "At least one valid two-sided Over/Under half-point line in an event/market/bookmaker."
+  },
+  "ranking_rule": {
+    "unit": "bookmaker across 8 competition-market discovery cells",
+    "primary": "breadth_cells_with_at_least_one_paired_half_point_line DESC",
+    "secondary": "total_events_present_across_8_cells DESC",
+    "tertiary": "total_paired_half_point_lines DESC",
+    "final_tie": "bookmaker_key ASC",
+    "max_selected": 10,
+    "manual_override": false
+  },
+  "ranking_top10": [
+    {"rank":1,"bookmaker":"pinnacle","breadth_cells":8,"events_present_total":30,"paired_half_point_lines":68},
+    {"rank":2,"bookmaker":"betmgm","breadth_cells":6,"events_present_total":29,"paired_half_point_lines":176},
+    {"rank":3,"bookmaker":"draftkings","breadth_cells":6,"events_present_total":28,"paired_half_point_lines":93},
+    {"rank":4,"bookmaker":"betrivers","breadth_cells":6,"events_present_total":26,"paired_half_point_lines":257},
+    {"rank":5,"bookmaker":"espnbet","breadth_cells":6,"events_present_total":26,"paired_half_point_lines":37},
+    {"rank":6,"bookmaker":"leovegas","breadth_cells":4,"events_present_total":20,"paired_half_point_lines":99},
+    {"rank":7,"bookmaker":"fanduel","breadth_cells":4,"events_present_total":16,"paired_half_point_lines":209},
+    {"rank":8,"bookmaker":"ballybet","breadth_cells":3,"events_present_total":15,"paired_half_point_lines":117},
+    {"rank":9,"bookmaker":"betfair_ex_uk","breadth_cells":3,"events_present_total":11,"paired_half_point_lines":21},
+    {"rank":10,"bookmaker":"bovada","breadth_cells":2,"events_present_total":10,"paired_half_point_lines":23}
+  ],
+  "selected_bookmakers": ["pinnacle", "betmgm", "draftkings", "betrivers", "espnbet", "leovegas", "fanduel", "ballybet", "betfair_ex_uk", "bovada"],
+  "notable_discovery": {
+    "Premier League": "Both target market families present in all 5 sampled events for multiple selected bookmakers.",
+    "Championship": "Total corners strong at LeoVegas; team total corners sparse in current sample (Pinnacle 1/5). This is discovery information only and does not remove Championship from the frozen historical denominator.",
+    "Bundesliga": "Both target market families present in all 5 sampled events for BetRivers, BetMGM, DraftKings and Pinnacle.",
+    "LaLiga": "Both target market families present across the sample for several selected bookmakers, led by BetMGM and ESPN Bet."
+  },
+  "holdout_protection": {
+    "february_2026_historical_data_observed": false,
+    "denominator_unchanged": true,
+    "thresholds_unchanged": true,
+    "horizons_unchanged": true,
+    "max_odds_age_unchanged": true,
+    "markets_unchanged": true,
+    "no_post_holdout_bookmaker_substitution": true
+  }
+}
