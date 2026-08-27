@@ -1,0 +1,401 @@
+name: Secure OddsPapi H13 Frozen Holdout
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-oddspapi-h13.yml'
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  holdout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Publish ephemeral H13 public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'corners-lab-runner'
+          git config user.email 'corners-lab-runner@users.noreply.github.com'
+          mkdir -p secure_exchange_h13 h13_holdout
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/h13_private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/h13_private.pem -pubout -out secure_exchange_h13/public_key.pem >/dev/null 2>&1
+          printf '%s\n' "${GITHUB_RUN_ID}" > secure_exchange_h13/session.txt
+          git add secure_exchange_h13/public_key.pem secure_exchange_h13/session.txt
+          git commit -m "Publish ephemeral H13 public key ${GITHUB_RUN_ID}"
+          git push origin HEAD:master
+
+      - name: Frozen H13 collection and audit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CIPHER="secure_exchange_h13/ciphertext_${GITHUB_RUN_ID}.hex"
+          for i in $(seq 1 180); do
+            git pull --rebase origin master >/dev/null 2>&1 || true
+            if [ -s "$CIPHER" ]; then break; fi
+            sleep 2
+          done
+          test -s "$CIPHER"
+          tr -d '\r\n ' <"$CIPHER" | xxd -r -p >/tmp/h13_secret.enc
+          test "$(stat -c%s /tmp/h13_secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/h13_private.pem -in /tmp/h13_secret.enc -out /tmp/h13_api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          chmod 600 /tmp/h13_api_key.txt
+          test -s /tmp/h13_api_key.txt
+
+          mkdir -p audit_input /tmp/h13_frozen_artifact h13_holdout/raw_historical
+          gh api repos/${GITHUB_REPOSITORY}/actions/artifacts/9649446403/zip > /tmp/h13_frozen_artifact.zip
+          unzip -q /tmp/h13_frozen_artifact.zip -d /tmp/h13_frozen_artifact
+          cp /tmp/h13_frozen_artifact/eligible_fixtures.csv audit_input/eligible_fixtures.csv
+          cp h13/market_catalog_target_H13.csv audit_input/market_catalog_target_H13.csv
+          cp h13/oddspapi_h13_protocol_pre_registered.json audit_input/oddspapi_h13_protocol_pre_registered.json
+          cp h13/selection_frozen/candidate_selection.csv audit_input/candidate_selection.csv
+          cp h13/selection_frozen/discovery_book_stats.csv audit_input/discovery_book_stats.csv
+          cp h13/selection_frozen/candidate_selection_manifest.json audit_input/candidate_selection_manifest.json
+          cp h13/select_h13_candidates.py audit_input/select_h13_candidates.py
+
+          python - <<'PYCODE'
+          from pathlib import Path
+          from datetime import datetime, timezone, timedelta
+          from collections import defaultdict
+          import csv, gzip, hashlib, json, time, requests
+
+          ROOT=Path('.')
+          IN=ROOT/'audit_input'
+          OUT=ROOT/'h13_holdout'
+          RAW=OUT/'raw_historical'
+          OUT.mkdir(exist_ok=True)
+          RAW.mkdir(parents=True, exist_ok=True)
+          key=Path('/tmp/h13_api_key.txt').read_text(encoding='utf-8').strip()
+          if not key:
+              raise SystemExit('EMPTY_KEY')
+
+          BASE='https://api.oddspapi.io/v4'
+          EXPECTED_PROTOCOL_SHA='63cdc0b6151082cae262dded74b397fd6872d97c162731153f8b50bf2316a068'
+          EXPECTED_CATALOG_LF_SHA='e5a94b1eb282c7df2a547ac3c0425f2016cca10d183b278daeea62679c267a56'
+          EXPECTED_SELECTION_SHA='d752d11a8e71d16c6a347e41a9f3ed7aec6c0b99b29d337680c6b961a7089178'
+          EXPECTED_DISCOVERY_STATS_SHA='2681911c9455696275e74a245a22d670d03bb2d1eb69da375bceb1cf2905bc55'
+          EXPECTED_SELECTOR_SHA='6d34e0514910f1a5fb6a904ed2a8883eae67872973d0e511c4060ebf8ec167f8'
+          FAMILIES=['TOTAL_CORNERS','HOME_TEAM_TOTAL_CORNERS','AWAY_TEAM_TOTAL_CORNERS']
+          HORIZONS=[60,30,15]
+          MAX_AGE=300.0
+          PASS_RATE=.90
+          PARTIAL=.70
+          BOOK_ADMIT=.80
+          MIN_N=25
+          EXPECTED_TIDS={'Premier League':17,'Championship':18,'Bundesliga':35,'LaLiga':8}
+
+          def sha_bytes(b): return hashlib.sha256(b).hexdigest()
+          def sha_file(p): return sha_bytes(Path(p).read_bytes())
+          def dt(x):
+              if not x: return None
+              try:
+                  d=datetime.fromisoformat(str(x).replace('Z','+00:00'))
+              except Exception:
+                  return None
+              if d.tzinfo is None: d=d.replace(tzinfo=timezone.utc)
+              return d.astimezone(timezone.utc)
+          def fmt(d): return d.isoformat().replace('+00:00','Z') if d else None
+          def write_csv(path, rows, fields=None):
+              rows=list(rows)
+              if fields is None:
+                  fields=list(rows[0].keys()) if rows else []
+              with open(path,'w',newline='',encoding='utf-8') as f:
+                  w=csv.DictWriter(f,fieldnames=fields,extrasaction='ignore')
+                  if fields: w.writeheader()
+                  w.writerows(rows)
+
+          protocol_path=IN/'oddspapi_h13_protocol_pre_registered.json'
+          manifest_path=IN/'candidate_selection_manifest.json'
+          if sha_file(protocol_path)!=EXPECTED_PROTOCOL_SHA: raise SystemExit('FREEZE_PROTOCOL_HASH_FAIL')
+          if sha_file(IN/'market_catalog_target_H13.csv')!=EXPECTED_CATALOG_LF_SHA: raise SystemExit('FREEZE_CATALOG_HASH_FAIL')
+          if sha_file(IN/'candidate_selection.csv')!=EXPECTED_SELECTION_SHA: raise SystemExit('FREEZE_SELECTION_HASH_FAIL')
+          if sha_file(IN/'discovery_book_stats.csv')!=EXPECTED_DISCOVERY_STATS_SHA: raise SystemExit('FREEZE_DISCOVERY_STATS_HASH_FAIL')
+          if sha_file(IN/'select_h13_candidates.py')!=EXPECTED_SELECTOR_SHA: raise SystemExit('FREEZE_SELECTOR_HASH_FAIL')
+          protocol=json.loads(protocol_path.read_text(encoding='utf-8'))
+          sel_manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+          if sel_manifest.get('selection_protocol_version')!='ODDSPAPI_H_1.3_PRE_REGISTERED': raise SystemExit('FREEZE_PROTOCOL_VERSION_FAIL')
+          if sel_manifest.get('manual_override_used') is not False: raise SystemExit('FREEZE_MANUAL_OVERRIDE_FAIL')
+          if sel_manifest.get('holdout_observed_before_freeze') is not False: raise SystemExit('FREEZE_HOLDOUT_PREOBSERVATION_FAIL')
+          if protocol['holdout']['period_start_utc']!='2026-03-01T00:00:00Z' or protocol['holdout']['period_end_utc']!='2026-03-31T23:59:59Z':
+              raise SystemExit('HOLDOUT_PERIOD_CHANGED')
+          if protocol['market_contract']['horizons_minutes']!=[60,30,15]: raise SystemExit('HORIZONS_CHANGED')
+          if float(protocol['market_contract']['max_odds_age_seconds'])!=MAX_AGE: raise SystemExit('MAX_AGE_CHANGED')
+          if float(protocol['gates']['coverage_pass_rate'])!=PASS_RATE or float(protocol['gates']['coverage_partial_floor'])!=PARTIAL or float(protocol['gates']['bookmaker_admission_min_rate_across_all_horizons'])!=BOOK_ADMIT:
+              raise SystemExit('THRESHOLDS_CHANGED')
+
+          fixtures_all=list(csv.DictReader(open(IN/'eligible_fixtures.csv',encoding='utf-8')))
+          fixtures=[]
+          start=dt(protocol['holdout']['period_start_utc']); end=dt(protocol['holdout']['period_end_utc'])
+          for f in fixtures_all:
+              if f.get('competition') not in EXPECTED_TIDS: continue
+              ko=dt(f.get('kickoff_utc'))
+              if ko is None or not (start<=ko<=end): raise SystemExit('FROZEN_FIXTURE_OUTSIDE_HOLDOUT')
+              tid=int(f['tournament_id'])
+              if tid!=EXPECTED_TIDS[f['competition']]: raise SystemExit('FROZEN_TOURNAMENT_ID_MISMATCH')
+              f['tournament_id']=tid
+              f['kickoff_dt']=ko
+              fixtures.append(f)
+          counts={c:sum(1 for f in fixtures if f['competition']==c) for c in EXPECTED_TIDS}
+          if any(n<MIN_N for n in counts.values()): raise SystemExit('FROZEN_DENOMINATOR_BELOW_MINIMUM '+repr(counts))
+          if len({f['fixture_id'] for f in fixtures})!=len(fixtures): raise SystemExit('FROZEN_DUPLICATE_FIXTURE_ID')
+
+          cats=list(csv.DictReader(open(IN/'market_catalog_target_H13.csv',encoding='utf-8')))
+          cats_by_family=defaultdict(list)
+          for c in cats:
+              c['market_id']=int(c['market_id']); c['line']=float(c['line'])
+              c['over_outcome_id']=int(c['over_outcome_id']); c['under_outcome_id']=int(c['under_outcome_id'])
+              if c['market_family'] not in FAMILIES: raise SystemExit('UNEXPECTED_MARKET_FAMILY')
+              if abs((c['line']-.5)-round(c['line']-.5))>1e-9: raise SystemExit('NON_HALF_POINT_LINE')
+              cats_by_family[c['market_family']].append(c)
+
+          selected=sel_manifest['selected']
+          union_books={}
+          for comp in EXPECTED_TIDS:
+              union_books[comp]=sorted({b for fam in FAMILIES for b in selected[comp][fam]})
+          freeze_report={
+              'protocol_sha256':sha_file(protocol_path),
+              'catalog_lf_sha256':sha_file(IN/'market_catalog_target_H13.csv'),
+              'candidate_selection_sha256':sha_file(IN/'candidate_selection.csv'),
+              'discovery_book_stats_sha256':sha_file(IN/'discovery_book_stats.csv'),
+              'selector_sha256':sha_file(IN/'select_h13_candidates.py'),
+              'selection_manifest_sha256':sha_file(manifest_path),
+              'eligible_fixtures_sha256':sha_file(IN/'eligible_fixtures.csv'),
+              'eligible_counts':counts,
+              'selected':selected,
+              'union_books':union_books,
+              'freeze_gate':'PASS',
+              'holdout_observed_before_freeze':False
+          }
+          (OUT/'freeze_validation.json').write_text(json.dumps(freeze_report,indent=2,sort_keys=True),encoding='utf-8')
+
+          sess=requests.Session()
+          call_count=0; retries=0; raw_manifest=[]
+          for idx,f in enumerate(fixtures,1):
+              books=union_books[f['competition']]
+              groups=[books[i:i+3] for i in range(0,len(books),3)]
+              for gi,grp in enumerate(groups,1):
+                  params={'apiKey':key,'fixtureId':f['fixture_id'],'bookmakers':','.join(grp)}
+                  r=None
+                  for attempt in range(8):
+                      call_count+=1
+                      try:
+                          r=sess.get(BASE+'/historical-odds',params=params,timeout=120)
+                      except requests.RequestException:
+                          retries+=1
+                          time.sleep(min(2**attempt,20))
+                          continue
+                      if r.status_code==200: break
+                      if r.status_code==429 or 500<=r.status_code<600:
+                          retries+=1
+                          wait=min(2**attempt,20)
+                          if r.status_code==429:
+                              try:
+                                  p=r.json(); e=p.get('error') if isinstance(p,dict) else None
+                                  if isinstance(e,dict) and e.get('retryMs') is not None:
+                                      wait=max(wait,float(e['retryMs'])/1000+.5)
+                              except Exception: pass
+                          time.sleep(wait); continue
+                      break
+                  if r is None or r.status_code!=200:
+                      code=None if r is None else r.status_code
+                      err={'fixture_id':f['fixture_id'],'competition':f['competition'],'group_index':gi,'bookmakers':grp,'http_status':code,'kind':'CREDENTIAL_LIMIT_OR_HTTP_FAILURE'}
+                      (OUT/'collection_status.json').write_text(json.dumps({'status':'PARTIAL','error':err,'calls':call_count,'retries':retries,'completed_raw_requests':len(raw_manifest),'credential_persisted':False},indent=2),encoding='utf-8')
+                      write_csv(OUT/'raw_manifest.csv',raw_manifest)
+                      raise SystemExit('H13_COLLECTION_INTERRUPTED')
+                  body=r.content
+                  try: r.json()
+                  except Exception: raise SystemExit('H13_NON_JSON_200')
+                  rel=f'raw_historical/{f["fixture_id"]}_g{gi}.json.gz'
+                  (OUT/rel).write_bytes(gzip.compress(body,compresslevel=9))
+                  raw_manifest.append({'file':rel,'competition':f['competition'],'fixture_id':f['fixture_id'],'group_index':gi,'bookmakers':','.join(grp),'sha256_uncompressed':sha_bytes(body),'uncompressed_bytes':len(body),'http_status':200,'endpoint':'/historical-odds'})
+                  write_csv(OUT/'raw_manifest.csv',raw_manifest)
+              if idx%10==0 or idx==len(fixtures):
+                  (OUT/'collection_status.json').write_text(json.dumps({'status':'RUNNING' if idx<len(fixtures) else 'COLLECTED','fixtures_completed':idx,'fixtures_total':len(fixtures),'calls':call_count,'retries':retries,'completed_raw_requests':len(raw_manifest),'credential_persisted':False},indent=2),encoding='utf-8')
+                  print('H13_FIXTURES_DONE',idx,'OF',len(fixtures),flush=True)
+              time.sleep(.05)
+
+          all_hist={}
+          rows_by_fixture=defaultdict(list)
+          for row in raw_manifest: rows_by_fixture[row['fixture_id']].append(row)
+          for f in fixtures:
+              merged={'bookmakers':{}}
+              for row in sorted(rows_by_fixture[f['fixture_id']],key=lambda x:int(x['group_index'])):
+                  body=gzip.decompress((OUT/row['file']).read_bytes())
+                  if sha_bytes(body)!=row['sha256_uncompressed']: raise SystemExit('RAW_HASH_FAIL')
+                  p=json.loads(body)
+                  b=p.get('bookmakers',{}) if isinstance(p,dict) else {}
+                  if not isinstance(b,dict): raise SystemExit('RAW_BOOKMAKERS_SHAPE_FAIL')
+                  overlap=set(merged['bookmakers']).intersection(b)
+                  if overlap: raise SystemExit('RAW_BOOKMAKER_OVERLAP')
+                  merged['bookmakers'].update(b)
+              all_hist[f['fixture_id']]=merged
+
+          def snaps(hist,book,mid,oid):
+              try: arr=hist['bookmakers'][book]['markets'][str(mid)]['outcomes'][str(oid)]['players']['0']
+              except (KeyError,TypeError): return []
+              return arr if isinstance(arr,list) else []
+
+          def latest_at(arr,asof):
+              best=None; best_t=None
+              for x in arr:
+                  if not isinstance(x,dict): continue
+                  t=dt(x.get('createdAt'))
+                  if t is None or t>asof: continue
+                  if best_t is None or t>best_t:
+                      best=x; best_t=t
+              return best,best_t
+
+          snapshot_stats={}
+          duplicate_conflicts_total=0
+          for f in fixtures:
+              hist=all_hist[f['fixture_id']]; comp=f['competition']
+              for fam in FAMILIES:
+                  for book in selected[comp][fam]:
+                      for c in cats_by_family[fam]:
+                          ov=snaps(hist,book,c['market_id'],c['over_outcome_id']); un=snaps(hist,book,c['market_id'],c['under_outcome_id'])
+                          target=ov+un
+                          with_ts=sum(1 for x in target if isinstance(x,dict) and dt(x.get('createdAt')) is not None)
+                          conflicts=0
+                          for arr in (ov,un):
+                              seen={}
+                              for x in arr:
+                                  if not isinstance(x,dict): continue
+                                  t=x.get('createdAt')
+                                  if not t: continue
+                                  price=x.get('price')
+                                  if t in seen and seen[t]!=price: conflicts+=1
+                                  seen[t]=price
+                          duplicate_conflicts_total+=conflicts
+                          snapshot_stats[(f['fixture_id'],fam,book,c['market_id'])]=(len(target),with_ts,conflicts)
+
+          event_rows=[]
+          for f in fixtures:
+              hist=all_hist[f['fixture_id']]; ko=f['kickoff_dt']; comp=f['competition']
+              for fam in FAMILIES:
+                  subject=None if fam=='TOTAL_CORNERS' else (f['home'] if fam=='HOME_TEAM_TOTAL_CORNERS' else f['away'])
+                  for book in selected[comp][fam]:
+                      for hm in HORIZONS:
+                          asof=ko-timedelta(minutes=hm)
+                          valid=[]; ages=[]; ts_target=0; ts_with=0; confs=0
+                          for c in cats_by_family[fam]:
+                              ov=snaps(hist,book,c['market_id'],c['over_outcome_id']); un=snaps(hist,book,c['market_id'],c['under_outcome_id'])
+                              a,b,cc=snapshot_stats[(f['fixture_id'],fam,book,c['market_id'])]
+                              ts_target+=a; ts_with+=b; confs+=cc
+                              osnap,ot=latest_at(ov,asof); usnap,ut=latest_at(un,asof)
+                              if not osnap or not usnap or ot is None or ut is None: continue
+                              try: op=float(osnap.get('price')); up=float(usnap.get('price'))
+                              except Exception: continue
+                              if op<=1 or up<=1: continue
+                              if osnap.get('active') is False or usnap.get('active') is False: continue
+                              oa=(asof-ot).total_seconds(); ua=(asof-ut).total_seconds()
+                              if oa<0 or ua<0 or oa>MAX_AGE or ua>MAX_AGE: continue
+                              valid.append(c['line']); ages.extend([oa,ua])
+                          event_rows.append({'competition':comp,'tournament_id':f['tournament_id'],'fixture_id':f['fixture_id'],'kickoff_utc':fmt(ko),'home':f['home'],'away':f['away'],'market_family':fam,'subject':subject,'bookmaker':book,'horizon_minutes':hm,'prediction_as_of':fmt(asof),'covered':bool(valid),'valid_pair_count':len(valid),'freshest_age_seconds':min(ages) if ages else None,'max_selected_side_age_seconds':max(ages) if ages else None,'line_min':min(valid) if valid else None,'line_max':max(valid) if valid else None,'valid_lines':';'.join(str(x) for x in sorted(valid)) if valid else None,'target_snapshots':ts_target,'snapshots_with_timestamp':ts_with,'duplicate_timestamp_price_conflicts':confs})
+          write_csv(OUT/'event_coverage.csv',event_rows)
+
+          coverage=[]; bookmaker_cells=[]
+          for comp,tid in EXPECTED_TIDS.items():
+              denom=counts[comp]
+              for fam in FAMILIES:
+                  for hm in HORIZONS:
+                      subset=[r for r in event_rows if r['competition']==comp and r['market_family']==fam and r['horizon_minutes']==hm]
+                      byfix=defaultdict(list)
+                      for r in subset: byfix[r['fixture_id']].append(r)
+                      covered=sum(1 for f in fixtures if f['competition']==comp and any(x['covered'] for x in byfix.get(f['fixture_id'],[])))
+                      target=sum(r['target_snapshots'] for r in subset); withts=sum(r['snapshots_with_timestamp'] for r in subset); confs=sum(r['duplicate_timestamp_price_conflicts'] for r in subset)
+                      tcr=1.0 if target==0 else withts/target; rate=covered/denom if denom else 0.0
+                      valid_lines=[]
+                      for r in subset:
+                          if r['valid_lines']: valid_lines.extend(float(x) for x in r['valid_lines'].split(';'))
+                      if denom<MIN_N: status='FAIL_SAMPLE'
+                      elif confs>0 or tcr<1.0: status='FAIL_TEMPORAL'
+                      elif rate>=PASS_RATE: status='PASS'
+                      elif rate>=PARTIAL: status='PARTIAL'
+                      else: status='FAIL_COVERAGE'
+                      coverage.append({'competition':comp,'tournament_id':tid,'market_family':fam,'horizon_minutes':hm,'eligible_fixtures':denom,'covered_any_selected_bookmaker':covered,'coverage_rate':rate,'timestamp_complete_rate':tcr,'target_snapshots':target,'duplicate_timestamp_price_conflicts':confs,'status':status,'observed_line_min':min(valid_lines) if valid_lines else None,'observed_line_max':max(valid_lines) if valid_lines else None})
+                      for book in selected[comp][fam]:
+                          bs=[r for r in subset if r['bookmaker']==book]
+                          bc=sum(1 for r in bs if r['covered']); bt=sum(r['target_snapshots'] for r in bs); bw=sum(r['snapshots_with_timestamp'] for r in bs); bconf=sum(r['duplicate_timestamp_price_conflicts'] for r in bs)
+                          bookmaker_cells.append({'competition':comp,'tournament_id':tid,'market_family':fam,'horizon_minutes':hm,'bookmaker':book,'eligible_fixtures':denom,'covered_fixtures':bc,'coverage_rate':bc/denom if denom else 0,'timestamp_complete_rate':1.0 if bt==0 else bw/bt,'target_snapshots':bt,'duplicate_timestamp_price_conflicts':bconf})
+          write_csv(OUT/'coverage_36_cells.csv',coverage)
+          write_csv(OUT/'bookmaker_horizon_coverage.csv',bookmaker_cells)
+
+          admissions=[]
+          for comp,tid in EXPECTED_TIDS.items():
+              for fam in FAMILIES:
+                  for book in selected[comp][fam]:
+                      cells=[r for r in bookmaker_cells if r['competition']==comp and r['market_family']==fam and r['bookmaker']==book]
+                      admitted=len(cells)==3 and all(r['coverage_rate']>=BOOK_ADMIT and r['timestamp_complete_rate']==1.0 and r['duplicate_timestamp_price_conflicts']==0 for r in cells)
+                      admissions.append({'competition':comp,'tournament_id':tid,'market_family':fam,'bookmaker':book,'admitted':admitted,'min_horizon_coverage_rate':min((r['coverage_rate'] for r in cells),default=0),'all_timestamp_complete':all(r['timestamp_complete_rate']==1.0 for r in cells) if cells else False,'duplicate_timestamp_price_conflicts':sum(r['duplicate_timestamp_price_conflicts'] for r in cells)})
+          write_csv(OUT/'bookmaker_admissions.csv',admissions)
+
+          cm_status=[]
+          for comp,tid in EXPECTED_TIDS.items():
+              for fam in FAMILIES:
+                  cs=[r for r in coverage if r['competition']==comp and r['market_family']==fam]
+                  admitted=[a['bookmaker'] for a in admissions if a['competition']==comp and a['market_family']==fam and a['admitted']]
+                  if len(cs)==3 and all(r['status']=='PASS' for r in cs) and admitted: st='PASS'
+                  elif any(r['status'].startswith('FAIL') for r in cs): st='FAIL'
+                  elif len(cs)==3 and all(r['status']=='PASS' for r in cs) and not admitted: st='FAIL_BOOKMAKER_ADMISSION'
+                  else: st='PARTIAL'
+                  cm_status.append({'competition':comp,'tournament_id':tid,'market_family':fam,'status':st,'min_coverage_rate':min((r['coverage_rate'] for r in cs),default=0),'max_coverage_rate':max((r['coverage_rate'] for r in cs),default=0),'admitted_bookmakers':';'.join(admitted) if admitted else None})
+          write_csv(OUT/'competition_market_status.csv',cm_status)
+
+          closing=[]
+          for f in fixtures:
+              hist=all_hist[f['fixture_id']]; ko=f['kickoff_dt']; comp=f['competition']
+              for fam in FAMILIES:
+                  for book in selected[comp][fam]:
+                      for c in cats_by_family[fam]:
+                          ov=snaps(hist,book,c['market_id'],c['over_outcome_id']); un=snaps(hist,book,c['market_id'],c['under_outcome_id'])
+                          times=sorted({dt(x.get('createdAt')) for x in ov+un if isinstance(x,dict) and dt(x.get('createdAt')) is not None and dt(x.get('createdAt'))<ko},reverse=True)
+                          chosen=None
+                          for state_t in times:
+                              osnap,ot=latest_at(ov,state_t); usnap,ut=latest_at(un,state_t)
+                              if not osnap or not usnap or ot is None or ut is None: continue
+                              try: op=float(osnap.get('price')); up=float(usnap.get('price'))
+                              except Exception: continue
+                              if op<=1 or up<=1 or osnap.get('active') is False or usnap.get('active') is False: continue
+                              chosen=(state_t,ot,ut,op,up); break
+                          if chosen:
+                              state_t,ot,ut,op,up=chosen
+                              closing.append({'competition':comp,'fixture_id':f['fixture_id'],'kickoff_utc':fmt(ko),'market_family':fam,'bookmaker':book,'line':c['line'],'closing_state_time':fmt(state_t),'over_snapshot_time':fmt(ot),'under_snapshot_time':fmt(ut),'over_odds':op,'under_odds':up,'strictly_pre_kickoff':state_t<ko})
+          write_csv(OUT/'closing_pairs.csv',closing)
+
+          pass_contracts=[r for r in cm_status if r['status']=='PASS']
+          summary={'protocol_version':'ODDSPAPI_H_1.3_PRE_REGISTERED','operating_mode':'SHADOW','holdout_period':['2026-03-01T00:00:00Z','2026-03-31T23:59:59Z'],'eligible_counts':counts,'coverage_cells':len(coverage),'expected_coverage_cells':36,'pass_cells':sum(r['status']=='PASS' for r in coverage),'partial_cells':sum(r['status']=='PARTIAL' for r in coverage),'fail_cells':sum(r['status'].startswith('FAIL') for r in coverage),'competition_market_contracts':len(cm_status),'pass_contract_count':len(pass_contracts),'pass_contracts':pass_contracts,'h13_market_gate_pass':len(pass_contracts)>=1,'duplicate_timestamp_price_conflicts':duplicate_conflicts_total,'raw_requests':len(raw_manifest),'api_calls_including_retries':call_count,'retries':retries,'closing_pairs':len(closing),'credential_persisted':False,'step_H_status':'OPEN_PENDING_INTEGRATION_AND_FINAL_REVIEW','step_I_allowed':False}
+          if len(coverage)!=36: raise SystemExit('COVERAGE_CELL_COUNT_FAIL')
+          (OUT/'summary.json').write_text(json.dumps(summary,indent=2,sort_keys=True),encoding='utf-8')
+          (OUT/'collection_status.json').write_text(json.dumps({'status':'COMPLETE','fixtures_completed':len(fixtures),'fixtures_total':len(fixtures),'calls':call_count,'retries':retries,'completed_raw_requests':len(raw_manifest),'credential_persisted':False},indent=2),encoding='utf-8')
+
+          secret=key.encode(); files=[]
+          for p in sorted(OUT.rglob('*')):
+              if p.is_file() and p.name!='artifact_manifest.csv':
+                  b=p.read_bytes()
+                  if secret and secret in b: raise SystemExit('CREDENTIAL_LEAK:'+str(p))
+                  files.append({'file':str(p.relative_to(OUT)),'sha256':sha_bytes(b),'bytes':len(b)})
+          write_csv(OUT/'artifact_manifest.csv',files)
+          print('H13_COMPLETE',json.dumps(summary,sort_keys=True),flush=True)
+          PYCODE
+
+          rm -f /tmp/h13_api_key.txt /tmp/h13_private.pem /tmp/h13_secret.enc
+
+      - name: Upload H13 holdout artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-h13-frozen-holdout
+          path: h13_holdout
+          if-no-files-found: warn
+          retention-days: 90
