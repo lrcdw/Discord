@@ -1,0 +1,118 @@
+{
+  "protocol_version": "THEODDSAPI_H_1.4_PRE_REGISTERED",
+  "operating_mode": "SHADOW",
+  "created_date": "2026-08-27",
+  "purpose": "Material source remediation after H.1.3 closed FAIL_MARKET_COVERAGE. Test The Odds API on a new independent holdout without changing frozen H coverage or temporal criteria.",
+  "prior_result_preserved": {
+    "H_1_3_status": "CLOSED_FAIL_MARKET_COVERAGE",
+    "H_1_3_pass_cells": 0,
+    "H_1_3_total_cells": 36,
+    "H_1_3_pass_contracts": 0,
+    "H_1_3_total_contracts": 12,
+    "step_I_remains_blocked": true
+  },
+  "provider": {
+    "name": "The Odds API",
+    "base_host": "api.the-odds-api.com",
+    "historical_additional_markets_available_after": "2023-05-03T05:30:00Z",
+    "historical_snapshot_interval_seconds": 300,
+    "credential_must_not_be_persisted": true
+  },
+  "denominator": {
+    "source": "Football-Data.co.uk 2025/26 completed league fixtures/results, independent of odds availability",
+    "competition_codes": {
+      "Premier League": "E0",
+      "Championship": "E1",
+      "Bundesliga": "D1",
+      "LaLiga": "SP1"
+    },
+    "fixture_eligibility": "All completed men's full-time league fixtures with match date/kickoff inside the holdout window. Exclusions only for postponed/cancelled/abandoned/non-completed status; never exclude because The Odds API lacks an event id, bookmaker, market, line or price.",
+    "minimum_fixtures_per_competition": 25,
+    "event_id_resolution": "Resolve each denominator fixture to The Odds API historical event id by competition plus home/away teams plus kickoff/date. Unresolved provider event ids remain in denominator and count uncovered."
+  },
+  "holdout": {
+    "role": "NEW_INDEPENDENT_HOLDOUT",
+    "period_start_utc": "2026-02-01T00:00:00Z",
+    "period_end_utc": "2026-02-28T23:59:59Z",
+    "selection_rationale": "Nearest full calendar month before the previously observed March holdout, same 2025/26 seasons, not used as an H.1.3 evaluation month, frozen before any The Odds API historical query.",
+    "competitions": [
+      "Premier League",
+      "Championship",
+      "Bundesliga",
+      "LaLiga"
+    ]
+  },
+  "provider_market_mapping": {
+    "TOTAL_CORNERS": "alternate_totals_corners",
+    "HOME_TEAM_TOTAL_CORNERS": "alternate_team_totals_corners filtered to home team",
+    "AWAY_TEAM_TOTAL_CORNERS": "alternate_team_totals_corners filtered to away team"
+  },
+  "candidate_bookmakers": {
+    "selection_basis": "Fixed before holdout from The Odds API official bookmaker registry; no holdout-driven substitution or ranking.",
+    "max_count": 10,
+    "keys": [
+      "betonlineag",
+      "betmgm",
+      "betrivers",
+      "betus",
+      "bovada",
+      "draftkings",
+      "fanduel",
+      "hardrockbet",
+      "lowvig",
+      "mybookieag"
+    ],
+    "manual_replacement_after_holdout_observation": false,
+    "missing_bookmaker_rule": "Missing bookmaker data is uncovered, not grounds for replacement."
+  },
+  "market_contract": {
+    "period": "FULL_MATCH",
+    "pregame_only": true,
+    "half_point_lines_only": true,
+    "horizons_minutes": [60, 30, 15],
+    "max_odds_age_seconds": 300,
+    "pair_reconstruction": "For each bookmaker, market contract and half-point line independently, use the provider historical snapshot equal to or immediately before prediction_as_of. Require a two-sided Over/Under pair for the identical bookmaker, market, team where applicable, period and line. Provider/bookmaker/market timestamp or last_update must be nonfuture and each side age <=300 seconds. Prices must be >1 and valid.",
+    "cross_book_pairing_prohibited": true,
+    "cross_line_pairing_prohibited": true,
+    "future_snapshot_prohibited": true
+  },
+  "gates": {
+    "coverage_pass_rate": 0.90,
+    "coverage_partial_floor": 0.70,
+    "bookmaker_admission_min_rate_across_all_horizons": 0.80,
+    "timestamp_complete_rate_required": 1.0,
+    "duplicate_same_timestamp_different_price_allowed": false,
+    "competition_market_pass": "All three horizons PASS and at least one fixed candidate bookmaker admitted for the contract.",
+    "no_threshold_changes_after_holdout_observation": true,
+    "zero_provider_event_rule": "Fixture remains denominator and is uncovered.",
+    "zero_market_rule": "Fixture remains denominator and is uncovered."
+  },
+  "raw_integrity": {
+    "preserve_raw_responses": true,
+    "sha256_every_raw": true,
+    "preserve_response_usage_headers": [
+      "x-requests-remaining",
+      "x-requests-used",
+      "x-requests-last"
+    ],
+    "credential_leak_scan_required": true
+  },
+  "cost_control": {
+    "bookmakers_parameter_used": true,
+    "bookmaker_batch_size": 10,
+    "bookmaker_batch_equivalent_regions": 1,
+    "historical_event_odds_cost_formula": "10 * unique_markets_returned * bookmaker_region_equivalents * events * horizons",
+    "markets_per_event_request": 2,
+    "horizons_per_fixture": 3,
+    "expected_max_cost_per_fixture_if_both_markets_return": 60,
+    "note": "Actual cost can be lower when requested markets return no data because quota counts unique markets returned."
+  },
+  "promotion": {
+    "H_final_pass_requires": "At least one competition/market contract PASS plus all infrastructure, temporal, raw-integrity, SQLite, test and restore gates PASS.",
+    "failed_contracts_remain_out_of_domain": true,
+    "step_I_allowed_only_after_H_final_review": true,
+    "model_training_allowed_before_H_final_pass": false,
+    "paper_candidate_allowed_before_H_final_pass": false,
+    "live_allowed": false
+  }
+}
