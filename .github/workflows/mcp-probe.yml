@@ -8,61 +8,65 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
-      - name: Probe Sports Game Odds MCP
+      - name: Probe structured historical corner odds
         shell: bash
         run: |
           python - <<'PY'
-          import json, requests, pathlib
+          import json, requests, pathlib, time
 
-          URL = 'https://gateway.pipeworx.io/sports-game-odds/mcp'
-          base_headers = {
-              'Content-Type': 'application/json',
-              'Accept': 'application/json, text/event-stream',
-          }
+          URL='https://gateway.pipeworx.io/sports-game-odds/mcp'
+          BASE={'Content-Type':'application/json','Accept':'application/json, text/event-stream'}
 
           def parse(resp):
-              text = resp.text
+              txt=resp.text
               if 'text/event-stream' in resp.headers.get('content-type',''):
                   vals=[]
-                  for line in text.splitlines():
+                  for line in txt.splitlines():
                       if line.startswith('data:'):
                           raw=line[5:].strip()
                           try: vals.append(json.loads(raw))
                           except Exception: pass
-                  return vals[-1] if vals else {'raw': text[:4000]}
+                  return vals[-1] if vals else {'raw':txt[:10000]}
               try: return resp.json()
-              except Exception: return {'raw': text[:4000]}
+              except Exception: return {'raw':txt[:10000]}
 
-          init = {
-              'jsonrpc':'2.0','id':1,'method':'initialize',
-              'params':{
-                  'protocolVersion':'2025-03-26',
-                  'capabilities':{},
-                  'clientInfo':{'name':'corners-lab-audit','version':'1.0'}
-              }
-          }
-          r=requests.post(URL,headers=base_headers,json=init,timeout=40)
-          out={'initialize_status':r.status_code,'initialize':parse(r)}
+          init={'jsonrpc':'2.0','id':1,'method':'initialize','params':{
+              'protocolVersion':'2025-03-26','capabilities':{},
+              'clientInfo':{'name':'corners-lab-audit','version':'1.1'}}}
+          r=requests.post(URL,headers=BASE,json=init,timeout=60)
           session=r.headers.get('mcp-session-id') or r.headers.get('Mcp-Session-Id')
-          h=dict(base_headers)
-          if session: h['Mcp-Session-Id']=session
+          H=dict(BASE)
+          if session: H['Mcp-Session-Id']=session
+          try: requests.post(URL,headers=H,json={'jsonrpc':'2.0','method':'notifications/initialized','params':{}},timeout=20)
+          except Exception: pass
 
-          try:
-              requests.post(URL,headers=h,json={'jsonrpc':'2.0','method':'notifications/initialized','params':{}},timeout=20)
-          except Exception:
-              pass
+          seq=10
+          def call(name,args):
+              global seq
+              seq+=1
+              req={'jsonrpc':'2.0','id':seq,'method':'tools/call','params':{'name':name,'arguments':args}}
+              rr=requests.post(URL,headers=H,json=req,timeout=180)
+              return {'http_status':rr.status_code,'body':parse(rr)}
 
-          q={'jsonrpc':'2.0','id':2,'method':'tools/list','params':{}}
-          r2=requests.post(URL,headers=h,json=q,timeout=40)
-          out['tools_status']=r2.status_code
-          out['tools']=parse(r2)
-          out['session_present']=bool(session)
+          out={'initialize_status':r.status_code,'session_present':bool(session),'calls':{}}
+          out['calls']['discover']=call('discover_tools',{
+              'query':'historical pre-match soccer corner kick betting odds by bookmaker, full match total corners and home/away team corner totals, exact timestamps, opening and closing prices, Premier League Championship Bundesliga La Liga',
+              'limit':30})
+          out['calls']['epl_grounded']=call('ask_pipeworx_grounded',{
+              'question':'Using only structured sportsbook data available through Pipeworx, find completed English Premier League fixtures from 2026-04-01 through 2026-04-30 and return bookmaker-specific PREMATCH full-match corner markets only: total corners over/under and home-team/away-team total corners over/under. For every quote include event identifier, teams, kickoff UTC, bookmaker, exact half-point line, Over decimal odds, Under decimal odds, quote timestamp, and closing quote if available. Return no inferred or synthesized prices. If the source cannot provide this, explicitly refuse and state the missing field/source.'})
+          out['calls']['bundesliga_grounded']=call('ask_pipeworx_grounded',{
+              'question':'Using only structured sportsbook data available through Pipeworx, find completed German Bundesliga fixtures from 2026-04-01 through 2026-04-30 and return bookmaker-specific PREMATCH full-match corner markets only: total corners over/under and home-team/away-team total corners over/under. For every quote include event identifier, teams, kickoff UTC, bookmaker, exact half-point line, Over decimal odds, Under decimal odds, quote timestamp, and closing quote if available. Return no inferred or synthesized prices. If the source cannot provide this, explicitly refuse and state the missing field/source.'})
+          out['calls']['laliga_grounded']=call('ask_pipeworx_grounded',{
+              'question':'Using only structured sportsbook data available through Pipeworx, find completed Spanish La Liga fixtures from 2026-04-01 through 2026-04-30 and return bookmaker-specific PREMATCH full-match corner markets only: total corners over/under and home-team/away-team total corners over/under. For every quote include event identifier, teams, kickoff UTC, bookmaker, exact half-point line, Over decimal odds, Under decimal odds, quote timestamp, and closing quote if available. Return no inferred or synthesized prices. If the source cannot provide this, explicitly refuse and state the missing field/source.'})
+          out['calls']['champ_grounded']=call('ask_pipeworx_grounded',{
+              'question':'Using only structured sportsbook data available through Pipeworx, find completed English Championship fixtures from 2026-04-01 through 2026-04-30 and return bookmaker-specific PREMATCH full-match corner markets only: total corners over/under and home-team/away-team total corners over/under. For every quote include event identifier, teams, kickoff UTC, bookmaker, exact half-point line, Over decimal odds, Under decimal odds, quote timestamp, and closing quote if available. Return no inferred or synthesized prices. If the source cannot provide this, explicitly refuse and state the missing field/source.'})
+          # Direct pack call without a key, intentionally, to establish whether the gateway has anonymous pack access.
+          out['calls']['sgo_anon_test']=call('sgo_events',{'leagueID':'EPL','oddsAvailable':True,'_apiKey':''})
+
           pathlib.Path('mcp_probe.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
-          print(json.dumps(out,indent=2)[:12000])
-          if r2.status_code >= 400:
-              raise SystemExit(2)
+          print(json.dumps(out,indent=2)[:20000])
           PY
       - name: Upload probe artifact
         if: always()
