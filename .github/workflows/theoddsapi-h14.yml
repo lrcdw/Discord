@@ -20,7 +20,7 @@ jobs:
       - name: Execute frozen H1.4 holdout
         env:
           THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
-        run: python h14/run_h14_theoddsapi.py
+        run: python h14/run_h14_theoddsapi_v2.py
       - name: Upload H1.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
