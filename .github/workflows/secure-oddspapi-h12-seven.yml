@@ -1,0 +1,78 @@
+name: Secure OddsPapi H12 Seven
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-oddspapi-h12-seven.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Collect seven missing historical raws
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'corners-lab-runner'
+          git config user.email 'corners-lab-runner@users.noreply.github.com'
+          EX=secure_exchange_h12seven
+          mkdir -p "$EX" h12_seven/raw_historical
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out "$EX/public_key.pem" >/dev/null 2>&1
+          printf '%s\n' "${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" > "$EX/session.txt"
+          git rm -f --ignore-unmatch "$EX/ciphertext.hex" >/dev/null 2>&1 || true
+          git add "$EX/public_key.pem" "$EX/session.txt"
+          git commit -m "Publish ephemeral H12 seven key ${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git push origin HEAD:master
+          for i in $(seq 1 100); do
+            git fetch origin master >/dev/null 2>&1 || true
+            if git cat-file -e origin/master:"$EX/ciphertext.hex" 2>/dev/null; then
+              git show origin/master:"$EX/ciphertext.hex" > /tmp/ciphertext.hex
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/ciphertext.hex
+          xxd -r -p /tmp/ciphertext.hex > /tmp/secret.enc
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+          chmod 600 /tmp/api_key.txt
+          python - <<'PY'
+          from pathlib import Path
+          import gzip, hashlib, json, requests, csv, time
+          ids=['id1000003561514156','id1000003561514158','id1000003561514160','id1000003561514162','id1000003561514164','id1000003561514154','id1000003561514148']
+          key=Path('/tmp/api_key.txt').read_text().strip()
+          out=Path('h12_seven'); raw=out/'raw_historical'
+          manifest=[]
+          for fid in ids:
+              r=requests.get('https://api.oddspapi.io/v4/historical-odds',params={'apiKey':key,'fixtureId':fid,'bookmakers':'pinnacle,bet365,singbet'},timeout=60)
+              if r.status_code!=200:
+                  raise SystemExit(f'HTTP_{r.status_code}_{fid}:{r.text[:200]}')
+              r.json()
+              body=r.content
+              p=raw/f'{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
+              manifest.append({'fixture_id':fid,'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'uncompressed_bytes':len(body),'http_status':200})
+              print('COLLECTED',fid,flush=True)
+              time.sleep(0.1)
+          with (out/'manifest.csv').open('w',newline='',encoding='utf-8') as f:
+              w=csv.DictWriter(f,fieldnames=manifest[0].keys()); w.writeheader(); w.writerows(manifest)
+          secret=key.encode()
+          for p in out.rglob('*'):
+              if p.is_file() and secret in p.read_bytes(): raise SystemExit('CREDENTIAL_LEAK:'+str(p))
+          print('SEVEN_COMPLETE',len(manifest))
+          PY
+          rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem /tmp/ciphertext.hex
+      - name: Upload seven raws
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-H12-seven
+          path: h12_seven
