@@ -12,7 +12,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -34,7 +34,7 @@ jobs:
           path: |
             public_key.pem
             exchange_info.txt
-      - name: Receive encrypted credential and smoke test
+      - name: Receive encrypted credential and current discovery
         shell: bash
         run: |
           set -euo pipefail
@@ -51,24 +51,21 @@ jobs:
           python - <<'PY'
           import re, subprocess
           from pathlib import Path
-          text=Path('/tmp/ciphertext_source.txt').read_text().strip()
-          tokens=[t.strip() for t in text.replace('\n',',').split(',') if t.strip()]
-          if len(tokens)!=384 or not all(re.fullmatch(r'\d{1,3}',t) for t in tokens):
-              raise SystemExit(f'BAD_CIPHER_DECIMAL count={len(tokens)}')
+          tokens=[t.strip() for t in Path('/tmp/ciphertext_source.txt').read_text().replace('\n',',').split(',') if t.strip()]
+          if len(tokens)!=384 or not all(re.fullmatch(r'\d{1,3}',t) for t in tokens): raise SystemExit(f'BAD_CIPHER count={len(tokens)}')
           vals=[int(t) for t in tokens]
           if any(v<0 or v>255 for v in vals): raise SystemExit('BAD_BYTE_RANGE')
           p=subprocess.run(['openssl','pkeyutl','-decrypt','-inkey','/tmp/private.pem','-pkeyopt','rsa_padding_mode:oaep','-pkeyopt','rsa_oaep_md:sha256','-pkeyopt','rsa_mgf1_md:sha256'],input=bytes(vals),capture_output=True)
-          if p.returncode: raise SystemExit('RSA_DECRYPT_FAIL')
-          if not re.fullmatch(rb'[A-Za-z0-9_-]{20,128}',p.stdout): raise SystemExit('KEY_FORMAT_FAIL')
+          if p.returncode or not re.fullmatch(rb'[A-Za-z0-9_-]{20,128}',p.stdout): raise SystemExit('RSA_FAIL')
           Path('/tmp/api_key.txt').write_bytes(p.stdout)
           print(f'RSA_OK KEY_LEN={len(p.stdout)}')
           PY
-          THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/smoke_current_theoddsapi.py
+          THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/discover_current_books_theoddsapi.py
           rm -f /tmp/api_key.txt /tmp/private.pem /tmp/ciphertext_source.txt public_key.pem exchange_info.txt
-      - name: Upload smoke evidence
+      - name: Upload discovery evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: h14-current-smoke-${{ github.run_id }}
-          path: h14_smoke_current
+          name: h14-current-discovery-${{ github.run_id }}
+          path: h14_current_discovery
           if-no-files-found: warn
