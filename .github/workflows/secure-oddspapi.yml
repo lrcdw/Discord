@@ -1,0 +1,107 @@
+name: Secure OddsPapi Discovery
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-oddspapi.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ephemeral key exchange and OddsPapi discovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'corners-lab-runner'
+          git config user.email 'corners-lab-runner@users.noreply.github.com'
+          SESSION="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p secure_exchange
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out secure_exchange/public_key.pem >/dev/null 2>&1
+          printf '%s\n' "$SESSION" > secure_exchange/session.txt
+          rm -f secure_exchange/ciphertext.b64
+          git add secure_exchange/public_key.pem secure_exchange/session.txt
+          git commit -m "Publish ephemeral audit public key $SESSION"
+          git push origin HEAD:master
+
+          echo 'Ephemeral public key published; polling for encrypted credential.'
+          for i in $(seq 1 90); do
+            git pull --rebase origin master >/dev/null 2>&1 || true
+            if [ -s secure_exchange/ciphertext.b64 ]; then break; fi
+            sleep 3
+          done
+          test -s secure_exchange/ciphertext.b64
+          base64 -d secure_exchange/ciphertext.b64 > /tmp/secret.enc
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
+          chmod 600 /tmp/api_key.txt
+
+          python - <<'PY'
+          import json, pathlib, requests, hashlib
+          BASE='https://api.oddspapi.io/v4'
+          key=pathlib.Path('/tmp/api_key.txt').read_text().strip()
+          if not key: raise SystemExit('EMPTY_KEY')
+          s=requests.Session()
+          def get(ep, **params):
+              params['apiKey']=key
+              r=s.get(BASE+ep,params=params,timeout=60)
+              try: data=r.json()
+              except Exception: data={'_non_json':r.text[:2000]}
+              if r.status_code>=400:
+                  raise RuntimeError(f'{ep} HTTP {r.status_code}: {str(data)[:500]}')
+              return data
+
+          account=get('/account')
+          active=[x for x in account.get('subscriptions',[]) if x.get('is_active')]
+          acct={
+              'auth_ok':True,
+              'active_subscription_count':len(active),
+              'subscriptions':[{
+                  'price':x.get('price'),'request_limit':x.get('request_limit'),
+                  'request_count':x.get('request_count'),'sport_ids':x.get('sport_ids'),
+                  'bookmakers':sorted((x.get('bookmakers') or {}).keys()),
+                  'websocket_access':x.get('websocket_access')
+              } for x in active]
+          }
+          markets=get('/markets',language='en')
+          corner=[]
+          for m in markets:
+              text=' '.join(str(m.get(k) or '') for k in ('marketName','marketNameShort','marketType','period')).lower()
+              if 'corner' in text:
+                  corner.append(m)
+          tournaments=get('/tournaments',sportId=10,language='en')
+          targets=[]
+          wanted=[('england','premier'),('england','championship'),('germany','bundesliga'),('spain','laliga')]
+          for t in tournaments:
+              hay=' '.join(str(t.get(k) or '') for k in ('tournamentName','tournamentSlug','categoryName','categorySlug')).lower()
+              for country,name in wanted:
+                  if country in hay and name in hay:
+                      targets.append(t); break
+          out={
+              'account':acct,
+              'corner_market_count':len(corner),
+              'corner_markets':corner,
+              'target_tournaments':targets,
+              'all_tournament_count':len(tournaments),
+          }
+          pathlib.Path('oddspapi_discovery.json').write_text(json.dumps(out,indent=2,ensure_ascii=False),encoding='utf-8')
+          print('AUTH_OK',acct['auth_ok'])
+          print('ACTIVE_SUBSCRIPTIONS',len(active))
+          print('CORNER_MARKETS',len(corner))
+          print('TARGET_TOURNAMENTS',[(x.get('tournamentId'),x.get('tournamentName'),x.get('categoryName')) for x in targets])
+          PY
+          rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem
+      - name: Upload sanitized discovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-discovery
+          path: oddspapi_discovery.json
