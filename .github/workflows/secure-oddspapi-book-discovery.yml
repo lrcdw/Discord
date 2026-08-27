@@ -12,7 +12,7 @@ permissions:
 jobs:
   discover:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - name: Generate ephemeral public key
@@ -29,7 +29,7 @@ jobs:
           path: |
             public_key.pem
             exchange_info.txt
-      - name: Discover corner bookmakers on fixed April samples
+      - name: Discover traditional corner bookmakers on fixed April samples
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -63,8 +63,8 @@ jobs:
           groups={
             'g1':'betparx,ballybet,betrivers',
             'g2':'betmgm,borgata,hardrockbet',
-            'g3':'fourwinds,polymarket,draftkings',
-            'g4':'fanduel,caesars,williamhill',
+            'g3':'fourwinds,draftkings,fanduel',
+            'g4':'caesars,williamhill,pointsbet',
           }
           sess=requests.Session(); manifest=[]; retries=0
           def get(fid,books):
@@ -74,7 +74,8 @@ jobs:
             for attempt in range(8):
               r=sess.get('https://api.oddspapi.io/v4/historical-odds',params=params,timeout=90); last=r
               print('HTTP',fid,books,r.status_code,'attempt',attempt+1,flush=True)
-              if r.status_code==200: r.json(); return r.content
+              if r.status_code==200:
+                r.json(); return r.content
               if r.status_code==429:
                 retries+=1; ms=5000
                 try:
@@ -96,7 +97,7 @@ jobs:
               time.sleep(.2)
           with (out/'manifest.csv').open('w',newline='',encoding='utf-8') as f:
             w=csv.DictWriter(f,fieldnames=manifest[0].keys()); w.writeheader(); w.writerows(manifest)
-          (out/'summary.json').write_text(json.dumps({'calls':len(manifest),'retries':retries,'credential_persisted':False,'discovery_only':True},indent=2),encoding='utf-8')
+          (out/'summary.json').write_text(json.dumps({'calls':len(manifest),'retries':retries,'credential_persisted':False,'discovery_only':True,'polymarket_excluded_reason':'different query and exchange-depth semantics'},indent=2),encoding='utf-8')
           secret=key.encode()
           for p in out.rglob('*'):
             if p.is_file() and secret in p.read_bytes(): raise SystemExit('CREDENTIAL_LEAK:'+str(p))
