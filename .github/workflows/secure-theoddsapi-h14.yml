@@ -1,0 +1,67 @@
+name: Secure The Odds API H1.4 Frozen Holdout
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-theoddsapi-h14.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  h14:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Generate ephemeral RSA exchange key
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out public_key.pem >/dev/null 2>&1
+          printf 'RUN_ID=%s\n' "$GITHUB_RUN_ID" > exchange_info.txt
+      - name: Upload ephemeral public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: h14-public-key-${{ github.run_id }}
+          path: |
+            public_key.pem
+            exchange_info.txt
+      - name: Wait for encrypted credential and execute frozen H1.4
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CIPHER_PATH="secure_exchange_h14/${GITHUB_RUN_ID}.hex"
+          for i in $(seq 1 300); do
+            if gh api "repos/${GITHUB_REPOSITORY}/contents/${CIPHER_PATH}" --jq .content >/tmp/ciphertext.b64 2>/dev/null; then
+              base64 -d /tmp/ciphertext.b64 >/tmp/ciphertext.hex
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/ciphertext.hex
+          tr -d '\r\n ' </tmp/ciphertext.hex | xxd -r -p >/tmp/secret.enc
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          test -s /tmp/api_key.txt
+          THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext.b64 public_key.pem exchange_info.txt
+      - name: Upload H1.4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h14-theoddsapi-evidence-${{ github.run_id }}
+          path: h14_runtime
+          if-no-files-found: warn
