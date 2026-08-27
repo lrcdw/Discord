@@ -55,28 +55,40 @@ jobs:
           test "$FOUND" -eq 1
           echo CIPHER_GIT_FOUND
           python - <<'PY'
-          import re
+          import re, subprocess
           from pathlib import Path
+
           text=Path('/tmp/ciphertext_source.txt').read_text(encoding='utf-8',errors='ignore')
-          matches=re.findall(r'(?i)(?<![0-9a-f])[0-9a-f]{768}(?![0-9a-f])',text)
-          if len(matches)!=1:
-              raise SystemExit(f'FAIL_CIPHER_BLOCK_COUNT={len(matches)}')
-          Path('/tmp/ciphertext.hex').write_text(matches[0],encoding='ascii')
-          print('CIPHER_BLOCK_EXTRACTED=768')
+          hexchars=''.join(re.findall(r'[0-9a-fA-F]', text))
+          print(f'HEXCHARS_TOTAL={len(hexchars)}')
+          if len(hexchars) < 768 or len(hexchars) > 900:
+              raise SystemExit('FAIL_CIPHER_HEX_LENGTH')
+
+          successes=[]
+          for start in range(len(hexchars)-768+1):
+              window=hexchars[start:start+768]
+              enc=bytes.fromhex(window)
+              p=subprocess.run([
+                  'openssl','pkeyutl','-decrypt',
+                  '-inkey','/tmp/private.pem',
+                  '-pkeyopt','rsa_padding_mode:oaep',
+                  '-pkeyopt','rsa_oaep_md:sha256',
+                  '-pkeyopt','rsa_mgf1_md:sha256'
+              ], input=enc, capture_output=True)
+              if p.returncode==0:
+                  plain=p.stdout
+                  if re.fullmatch(rb'[A-Za-z0-9_-]{20,128}', plain):
+                      successes.append((start, plain))
+
+          if len(successes)!=1:
+              raise SystemExit(f'FAIL_RSA_WINDOW_SUCCESS_COUNT={len(successes)}')
+          start,plain=successes[0]
+          Path('/tmp/api_key.txt').write_bytes(plain)
+          print(f'RSA_WINDOW_OK START={start} KEY_LEN={len(plain)}')
           PY
-          HEX="$(cat /tmp/ciphertext.hex)"
-          test "${#HEX}" -eq 768
-          printf '%s' "$HEX" | xxd -r -p >/tmp/secret.enc
-          ENC_SIZE="$(stat -c%s /tmp/secret.enc)"
-          echo "ENC_SIZE=$ENC_SIZE"
-          test "$ENC_SIZE" -eq 384
-          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
-            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
           test -s /tmp/api_key.txt
-          KEY_LEN="$(wc -c </tmp/api_key.txt)"
-          echo "DECRYPT_OK KEY_LEN=$KEY_LEN"
           THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
-          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext_source.txt public_key.pem exchange_info.txt
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/ciphertext_source.txt public_key.pem exchange_info.txt
       - name: Upload H1.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
