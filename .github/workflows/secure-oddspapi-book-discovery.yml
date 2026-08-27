@@ -64,7 +64,6 @@ jobs:
             'g1':'betparx,ballybet,betrivers',
             'g2':'betmgm,borgata,hardrockbet',
             'g3':'fourwinds,draftkings,fanduel',
-            'g4':'caesars,williamhill,pointsbet',
           }
           sess=requests.Session(); manifest=[]; retries=0
           def get(fid,books):
