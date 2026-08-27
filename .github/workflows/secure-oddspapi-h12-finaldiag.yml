@@ -1,0 +1,101 @@
+name: Secure OddsPapi H12 Final Diagnostic
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-oddspapi-h12-finaldiag.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate ephemeral key
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out public_key.pem >/dev/null 2>&1
+          echo "RUN_ID=${GITHUB_RUN_ID}" > exchange_info.txt
+      - name: Upload ephemeral public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: h12-finaldiag-public-key
+          path: |
+            public_key.pem
+            exchange_info.txt
+      - name: Wait for encrypted credential and collect
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CIPHER_PATH="secure_exchange_h12final/${GITHUB_RUN_ID}.hex"
+          echo "WAITING_FOR=${CIPHER_PATH}"
+          rm -f /tmp/ciphertext.hex
+          for i in $(seq 1 180); do
+            if gh api "repos/${GITHUB_REPOSITORY}/contents/${CIPHER_PATH}" --jq .content >/tmp/ciphertext.b64 2>/dev/null; then
+              base64 -d /tmp/ciphertext.b64 > /tmp/ciphertext.hex
+              echo "CIPHERTEXT_FOUND iteration=${i}"
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/ciphertext.hex
+          tr -d '\r\n ' </tmp/ciphertext.hex | xxd -r -p >/tmp/secret.enc
+          echo "CIPHERTEXT_BYTES=$(stat -c%s /tmp/secret.enc)"
+          test "$(stat -c%s /tmp/secret.enc)" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          test -s /tmp/api_key.txt
+          echo "DECRYPTED_BYTES=$(stat -c%s /tmp/api_key.txt)"
+          python - <<'PY'
+          from pathlib import Path
+          import requests, gzip, json, hashlib, csv, time
+          key=Path('/tmp/api_key.txt').read_text().strip()
+          out=Path('h12_finaldiag'); raw=out/'seven_raws'; diag=out/'allbooks_diag'
+          raw.mkdir(parents=True,exist_ok=True); diag.mkdir(parents=True,exist_ok=True)
+          seven=['id1000003561514156','id1000003561514158','id1000003561514160','id1000003561514162','id1000003561514164','id1000003561514154','id1000003561514148']
+          samples={
+            'premier_league':'id1000001761301157',
+            'championship':'id1000001861491247',
+            'bundesliga':'id1000003561514124',
+            'laliga':'id1000000861624592',
+          }
+          sess=requests.Session(); manifest=[]
+          def get(fid, books_marker, params_extra):
+              params={'apiKey':key,'fixtureId':fid}; params.update(params_extra)
+              r=sess.get('https://api.oddspapi.io/v4/historical-odds',params=params,timeout=90)
+              print('HTTP',fid,books_marker,r.status_code,flush=True)
+              if r.status_code!=200:
+                  try: msg=str(r.json())[:300]
+                  except Exception: msg='NON_JSON'
+                  raise SystemExit(f'HTTP_FAIL_{r.status_code}_{fid}_{books_marker}:{msg}')
+              body=r.content; r.json(); return body
+          for fid in seven:
+              body=get(fid,'benchmarks',{'bookmakers':'pinnacle,bet365,singbet'})
+              p=raw/f'{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
+              manifest.append({'kind':'seven','fixture_id':fid,'file':str(p.relative_to(out)),'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'bytes':len(body)})
+          for label,fid in samples.items():
+              body=get(fid,'allbooks',{})
+              p=diag/f'{label}_{fid}.json.gz'; p.write_bytes(gzip.compress(body,compresslevel=9))
+              manifest.append({'kind':'allbooks','fixture_id':fid,'file':str(p.relative_to(out)),'sha256_uncompressed':hashlib.sha256(body).hexdigest(),'bytes':len(body)})
+          with (out/'manifest.csv').open('w',newline='',encoding='utf-8') as f:
+              w=csv.DictWriter(f,fieldnames=manifest[0].keys()); w.writeheader(); w.writerows(manifest)
+          secret=key.encode()
+          for p in out.rglob('*'):
+              if p.is_file() and secret in p.read_bytes(): raise SystemExit('CREDENTIAL_LEAK:'+str(p))
+          print('FINALDIAG_COMPLETE',len(manifest),flush=True)
+          PY
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext.b64
+      - name: Upload completion and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: oddspapi-H12-finaldiag
+          path: h12_finaldiag
