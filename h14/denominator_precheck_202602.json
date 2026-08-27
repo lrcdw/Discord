@@ -1,0 +1,55 @@
+{
+  "artifact_version": "H14_DENOMINATOR_PRECHECK_202602_1.0",
+  "protocol_version": "THEODDSAPI_H_1.4_PRE_REGISTERED",
+  "protocol_commit": "3db986b2c8c92124fa923ac9cec68fc01c59bf33",
+  "created_date": "2026-08-27",
+  "historical_theoddsapi_observed_before_this_artifact": false,
+  "holdout": {
+    "period_start_utc": "2026-02-01T00:00:00Z",
+    "period_end_utc": "2026-02-28T23:59:59Z"
+  },
+  "independent_fixture_census": {
+    "Premier League": {
+      "completed_fixtures": 42,
+      "minimum_required": 25,
+      "precheck_status": "PASS",
+      "evidence": "Sky Sports Premier League Scores & Fixtures February 2026; completed FT fixtures only. Matches moved to March are outside February denominator."
+    },
+    "Championship": {
+      "completed_fixtures": 62,
+      "minimum_required": 25,
+      "precheck_status": "PASS",
+      "evidence": "Sky Sports Championship Scores & Fixtures February 2026; completed FT fixtures only."
+    },
+    "Bundesliga": {
+      "completed_fixtures": 35,
+      "minimum_required": 25,
+      "precheck_status": "PASS",
+      "evidence": "Sky Sports German Bundesliga Scores & Fixtures February 2026; completed FT fixtures only."
+    },
+    "LaLiga": {
+      "completed_fixtures": 40,
+      "minimum_required": 25,
+      "precheck_status": "PASS",
+      "evidence": "Sky Sports Spanish La Liga Scores & Fixtures February 2026; completed FT fixtures only."
+    }
+  },
+  "total_completed_fixtures": 179,
+  "all_competitions_meet_minimum": true,
+  "quota_ceiling": {
+    "fixed_bookmaker_batch_equivalent_regions": 1,
+    "markets_per_fixture_horizon": 2,
+    "horizons_per_fixture": 3,
+    "historical_event_odds_credits_per_market_region_event": 10,
+    "max_historical_event_odds_credits": 10740,
+    "max_event_id_resolution_calls_if_one_per_fixture": 179,
+    "historical_events_credit_per_nonempty_call": 1,
+    "max_event_id_resolution_credits": 179,
+    "max_total_holdout_credits": 10919,
+    "recommended_paid_quota": 20000,
+    "headroom_credits_at_20000": 9081,
+    "note": "This is a conservative ceiling. Empty historical responses do not cost usage quota and event-id resolution can be batched/reused by timestamp, so actual usage may be lower."
+  },
+  "gate": "PASS_PRE_HOLDOUT_DENOMINATOR_AND_QUOTA",
+  "next_allowed_operation": "After paid historical access is available, resolve provider historical event IDs and execute frozen T-60/T-30/T-15 requests without changing denominator, bookmakers, markets or thresholds."
+}
