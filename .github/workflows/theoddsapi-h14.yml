@@ -1,0 +1,30 @@
+name: H1.4 The Odds API Frozen Holdout
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  h14:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Execute frozen H1.4 holdout
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        run: python h14/run_h14_theoddsapi.py
+      - name: Upload H1.4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h14-theoddsapi-evidence-${{ github.run_id }}
+          path: h14_runtime
+          if-no-files-found: warn
