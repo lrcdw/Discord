@@ -1,0 +1,57 @@
+{
+  "protocol_version": "THESTATSAPI_H_1.5_CAPABILITY_AUDIT_1.0",
+  "operating_mode": "SHADOW",
+  "created_date": "2026-08-27",
+  "purpose": "Free-trial capability audit to determine whether TheStatsAPI can satisfy the existing Step H market and temporal requirements before any new holdout is observed.",
+  "prior_state": {
+    "H_1_3": "CLOSED_FAIL_MARKET_COVERAGE",
+    "H_1_4": "PRE_REGISTERED_BUT_NOT_EXECUTED_HISTORICALLY",
+    "step_I_allowed": false
+  },
+  "provider": {
+    "name": "TheStatsAPI",
+    "trial": "7-day free trial; all endpoints documented as available during trial",
+    "documented_bookmakers": ["Bet365", "Pinnacle", "Paddy Power", "Betfair Sportsbook", "Kambi"],
+    "documented_markets_include": ["corners"],
+    "documented_historical_odds": true,
+    "documented_full_price_history_endpoint": "/odds/history with match_id",
+    "credential_must_not_be_persisted": true
+  },
+  "audit_scope": {
+    "holdout_data_must_not_be_observed": true,
+    "allowed_data": "current/upcoming fixtures and provider documentation only",
+    "competitions": ["Premier League", "Championship", "Bundesliga", "LaLiga"],
+    "required_contracts": ["TOTAL_CORNERS", "HOME_TEAM_TOTAL_CORNERS", "AWAY_TEAM_TOTAL_CORNERS"],
+    "required_temporal_support": [60, 30, 15],
+    "max_odds_age_seconds": 300
+  },
+  "capability_gates": {
+    "total_corners_required": true,
+    "home_team_total_corners_required": true,
+    "away_team_total_corners_required": true,
+    "bookmaker_identity_required": true,
+    "price_timestamp_required": true,
+    "full_price_history_required": true,
+    "half_point_lines_required": true,
+    "two_sided_over_under_required": true,
+    "pregame_full_match_required": true,
+    "no_cross_book_pairing": true,
+    "no_cross_line_pairing": true,
+    "fail_if_team_totals_not_supported": true,
+    "fail_if_history_only_opening_closing": true
+  },
+  "execution_sequence": [
+    "Authenticate trial key without persisting credential",
+    "Resolve one or more current/upcoming matches in each target competition",
+    "Fetch standard odds payload and enumerate exact corners market keys/schema",
+    "Fetch full odds history for sampled matches where available",
+    "Verify bookmaker identity and timestamp fields",
+    "Verify Total Corners half-point two-sided pairs",
+    "Search explicitly for home-team and away-team corner total contracts",
+    "Record raw responses with SHA256",
+    "Produce capability matrix per competition and contract",
+    "Only if all mandatory capabilities are proven may a new historical holdout protocol be frozen"
+  ],
+  "promotion_rule": "This audit cannot release Step I. Passing only authorizes pre-registration of a separate TheStatsAPI historical holdout. Failure leaves H open for source remediation.",
+  "no_threshold_or_scope_relaxation": true
+}
