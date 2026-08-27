@@ -1,0 +1,75 @@
+name: Secure The Odds API H1.4 Frozen Holdout v2
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/secure-theoddsapi-h14-v2.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  h14:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependency
+        run: python -m pip install --disable-pip-version-check requests
+      - name: Generate ephemeral RSA exchange key
+        shell: bash
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out /tmp/private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/private.pem -pubout -out public_key.pem >/dev/null 2>&1
+          printf 'RUN_ID=%s\n' "$GITHUB_RUN_ID" > exchange_info.txt
+          echo RSA_READY
+      - name: Upload ephemeral public key
+        uses: actions/upload-artifact@v4
+        with:
+          name: h14-v2-public-key-${{ github.run_id }}
+          path: |
+            public_key.pem
+            exchange_info.txt
+      - name: Wait for encrypted credential and execute frozen H1.4
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW_URL="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/master/secure_exchange_h14/${GITHUB_RUN_ID}.hex"
+          FOUND=0
+          for i in $(seq 1 300); do
+            if curl -fsSL "$RAW_URL" -o /tmp/ciphertext.hex 2>/dev/null; then
+              FOUND=1
+              break
+            fi
+            sleep 2
+          done
+          test "$FOUND" -eq 1
+          echo CIPHER_FOUND
+          HEX_LEN="$(tr -d '\r\n ' </tmp/ciphertext.hex | wc -c)"
+          echo "HEX_LEN=$HEX_LEN"
+          test "$HEX_LEN" -eq 768
+          tr -d '\r\n ' </tmp/ciphertext.hex | xxd -r -p >/tmp/secret.enc
+          ENC_SIZE="$(stat -c%s /tmp/secret.enc)"
+          echo "ENC_SIZE=$ENC_SIZE"
+          test "$ENC_SIZE" -eq 384
+          openssl pkeyutl -decrypt -inkey /tmp/private.pem -in /tmp/secret.enc -out /tmp/api_key.txt \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          test -s /tmp/api_key.txt
+          KEY_LEN="$(wc -c </tmp/api_key.txt)"
+          echo "DECRYPT_OK KEY_LEN=$KEY_LEN"
+          THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex public_key.pem exchange_info.txt
+      - name: Upload H1.4 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: h14-theoddsapi-evidence-${{ github.run_id }}
+          path: h14_runtime
+          if-no-files-found: warn
