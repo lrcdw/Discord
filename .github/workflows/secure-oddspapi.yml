@@ -1,4 +1,4 @@
-name: Secure OddsPapi Discovery
+name: Secure OddsPapi Coverage Audit
 
 on:
   push:
@@ -10,14 +10,14 @@ permissions:
   contents: write
 
 jobs:
-  discover:
+  audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Ephemeral key exchange and OddsPapi discovery
+      - name: Ephemeral key exchange and frozen coverage census
         shell: bash
         run: |
           set -euo pipefail
@@ -30,9 +30,8 @@ jobs:
           printf '%s\n' "$SESSION" > secure_exchange/session.txt
           git rm -f --ignore-unmatch secure_exchange/ciphertext.b64 secure_exchange/ciphertext.hex >/dev/null 2>&1 || true
           git add secure_exchange/public_key.pem secure_exchange/session.txt
-          git commit -m "Publish ephemeral audit public key $SESSION"
+          git commit -m "Publish ephemeral coverage-audit public key $SESSION"
           git push origin HEAD:master
-
           echo 'Ephemeral public key published; polling for encrypted credential.'
           for i in $(seq 1 90); do
             git pull --rebase origin master >/dev/null 2>&1 || true
@@ -46,83 +45,357 @@ jobs:
             -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256
           chmod 600 /tmp/api_key.txt
 
-          python - <<'PY'
-          import json, pathlib, requests
+          cat > /tmp/audit.py <<'PY'
+          import csv, gzip, hashlib, json, math, pathlib, re, statistics, time
+          from collections import defaultdict
+          from datetime import datetime, timezone, timedelta
+          import requests
+
           BASE='https://api.oddspapi.io/v4'
-          key=pathlib.Path('/tmp/api_key.txt').read_text().strip()
-          if not key: raise SystemExit('EMPTY_KEY')
-          s=requests.Session()
-
-          def get(ep, **params):
-              params['apiKey']=key
-              r=s.get(BASE+ep,params=params,timeout=60)
-              try: data=r.json()
-              except Exception: data={'_non_json':r.text[:2000]}
-              if r.status_code>=400:
-                  safe={'endpoint':ep,'status':r.status_code,'response_type':type(data).__name__}
-                  if isinstance(data,dict):
-                      safe['keys']=sorted(data.keys())
-                      safe['message']=data.get('message') or data.get('error')
-                  raise RuntimeError(json.dumps(safe))
-              return data
-
-          def seq(data, *keys):
-              if isinstance(data,list): return data
-              if isinstance(data,dict):
-                  for k in keys:
-                      v=data.get(k)
-                      if isinstance(v,list): return v
-              return []
-
-          account=get('/account')
-          active=[]
-          if isinstance(account,dict):
-              active=[x for x in (account.get('subscriptions') or []) if isinstance(x,dict) and x.get('is_active')]
-          acct={
-              'auth_ok':True,
-              'active_subscription_count':len(active),
-              'subscriptions':[{
-                  'price':x.get('price'),'request_limit':x.get('request_limit'),
-                  'request_count':x.get('request_count'),'sport_ids':x.get('sport_ids'),
-                  'bookmakers':sorted((x.get('bookmakers') or {}).keys()) if isinstance(x.get('bookmakers'),dict) else x.get('bookmakers'),
-                  'websocket_access':x.get('websocket_access')
-              } for x in active]
+          KEY=pathlib.Path('/tmp/api_key.txt').read_text().strip()
+          OUT=pathlib.Path('oddspapi_audit_output')
+          RAW=OUT/'raw'
+          OUT.mkdir(exist_ok=True); RAW.mkdir(exist_ok=True)
+          BOOKS=['pinnacle','bet365','singbet']
+          COMPS={
+            17:('Premier League','England'),
+            18:('Championship','England'),
+            35:('Bundesliga','Germany'),
+            8:('LaLiga','Spain'),
           }
-          markets_raw=get('/markets',language='en')
-          markets=seq(markets_raw,'markets','data','results')
-          corner=[]
+          FAMILIES={
+            'totals-corners':'TOTAL_CORNERS',
+            'teamtotals-corners-team1':'HOME_TEAM_TOTAL_CORNERS',
+            'teamtotals-corners-team2':'AWAY_TEAM_TOTAL_CORNERS',
+          }
+          HORIZONS=[60,30,15]
+          MIN_N=25
+          MAX_AGE=300
+          PASS_RATE=0.90
+          PARTIAL_FLOOR=0.70
+          BOOK_ADMIT=0.80
+          START=datetime(2026,4,1,tzinfo=timezone.utc)
+          END=datetime(2026,5,1,tzinfo=timezone.utc)
+          sess=requests.Session()
+          raw_manifest=[]
+          api_calls=0
+          rate_limit_retries=0
+
+          def parsedt(x):
+            if not x: return None
+            try:
+              z=str(x).strip().replace('Z','+00:00')
+              d=datetime.fromisoformat(z)
+              if d.tzinfo is None: d=d.replace(tzinfo=timezone.utc)
+              return d.astimezone(timezone.utc)
+            except Exception: return None
+
+          def safe_name(s): return re.sub(r'[^A-Za-z0-9_.-]+','_',str(s))[:180]
+
+          def save_raw(label, body, meta):
+            sha=hashlib.sha256(body).hexdigest()
+            p=RAW/(safe_name(label)+'.json.gz')
+            p.write_bytes(gzip.compress(body, compresslevel=9))
+            raw_manifest.append({'file':str(p.relative_to(OUT)),'sha256':sha,'uncompressed_bytes':len(body),**meta})
+            return sha
+
+          def api_get(endpoint, raw_label=None, raw_meta=None, **params):
+            global api_calls, rate_limit_retries
+            params=dict(params); params['apiKey']=KEY
+            for attempt in range(10):
+              api_calls += 1
+              r=sess.get(BASE+endpoint,params=params,timeout=90)
+              if r.status_code==429:
+                rate_limit_retries += 1
+                try:
+                  data=r.json(); e=data.get('error') or {}
+                  retry_ms=(e.get('retryMs') if isinstance(e,dict) else None) or data.get('retryMs') or 2000
+                except Exception: retry_ms=2000
+                time.sleep(min(max(float(retry_ms)/1000+0.3,0.5),20))
+                continue
+              if 500 <= r.status_code < 600 and attempt < 5:
+                time.sleep(1.5*(attempt+1)); continue
+              if r.status_code >= 400:
+                try:
+                  d=r.json(); msg=(d.get('message') or d.get('error')) if isinstance(d,dict) else type(d).__name__
+                except Exception: msg='NON_JSON'
+                raise RuntimeError(f'API_HARD_FAIL endpoint={endpoint} status={r.status_code} message={str(msg)[:300]}')
+              body=r.content
+              if raw_label: save_raw(raw_label,body,raw_meta or {'endpoint':endpoint})
+              try: return r.json()
+              except Exception: raise RuntimeError(f'API_NON_JSON endpoint={endpoint} status={r.status_code}')
+            raise RuntimeError(f'API_RETRY_EXHAUSTED endpoint={endpoint}')
+
+          # Market catalogue: dynamic IDs, no hardcoded line IDs.
+          markets=api_get('/markets',raw_label='markets_soccer',raw_meta={'endpoint':'/markets'},sportId=10,language='en')
+          if not isinstance(markets,list): raise RuntimeError('MARKET_CATALOG_NOT_LIST')
+          catalog={}
+          catalog_rows=[]
           for m in markets:
-              if not isinstance(m,dict): continue
-              text=' '.join(str(m.get(k) or '') for k in ('marketName','marketNameShort','marketType','period','name','slug')).lower()
-              if 'corner' in text:
-                  corner.append(m)
-          tournaments_raw=get('/tournaments',sportId=10,language='en')
-          tournaments=seq(tournaments_raw,'tournaments','data','results')
-          targets=[]
-          wanted=('premier league','championship','bundesliga','la liga')
-          for t in tournaments:
-              if not isinstance(t,dict): continue
-              hay=' '.join(str(t.get(k) or '') for k in ('tournamentName','tournamentSlug','categoryName','categorySlug','name','slug')).lower()
-              if any(w in hay for w in wanted): targets.append(t)
-          out={
-              'account':acct,
-              'markets_response_type':type(markets_raw).__name__,
-              'market_count':len(markets),
-              'corner_market_count':len(corner),
-              'corner_markets':corner,
-              'tournaments_response_type':type(tournaments_raw).__name__,
-              'target_tournaments':targets,
-              'all_tournament_count':len(tournaments),
+            if not isinstance(m,dict): continue
+            mt=m.get('marketType'); period=m.get('period'); hand=m.get('handicap')
+            if mt not in FAMILIES or period!='fulltime': continue
+            try: line=float(hand)
+            except Exception: continue
+            if abs((line % 1)-0.5)>1e-9: continue
+            outs={str(o.get('outcomeName','')).strip().lower():int(o['outcomeId']) for o in m.get('outcomes',[]) if isinstance(o,dict) and o.get('outcomeId') is not None}
+            if 'over' not in outs or 'under' not in outs: continue
+            mid=int(m['marketId'])
+            catalog[mid]={'family':FAMILIES[mt],'line':line,'over_id':outs['over'],'under_id':outs['under'],'market_type':mt,'market_name':m.get('marketName')}
+            catalog_rows.append({'market_id':mid,'market_family':FAMILIES[mt],'provider_market_type':mt,'market_name':m.get('marketName'),'period':period,'line':line,'over_outcome_id':outs['over'],'under_outcome_id':outs['under']})
+          for fam in FAMILIES.values():
+            if not any(x['family']==fam for x in catalog.values()): raise RuntimeError(f'TARGET_MARKET_MISSING {fam}')
+
+          # Verify target tournament identities before fixture ingestion.
+          tours=api_get('/tournaments',raw_label='tournaments_soccer',raw_meta={'endpoint':'/tournaments'},sportId=10,language='en')
+          if not isinstance(tours,list): raise RuntimeError('TOURNAMENT_CATALOG_NOT_LIST')
+          bytid={int(t['tournamentId']):t for t in tours if isinstance(t,dict) and t.get('tournamentId') is not None}
+          for tid,(name,cat) in COMPS.items():
+            t=bytid.get(tid)
+            if not t: raise RuntimeError(f'TOURNAMENT_ID_MISSING {tid}')
+            gotname=str(t.get('tournamentName') or '')
+            gotcat=str(t.get('categoryName') or '')
+            if gotname != name or gotcat != cat:
+              raise RuntimeError(f'TOURNAMENT_IDENTITY_MISMATCH {tid} expected={name}/{cat} got={gotname}/{gotcat}')
+
+          # Frozen date chunks. Denominator is all finished target fixtures, irrespective of hasOdds.
+          chunks=[('2026-04-01','2026-04-11'),('2026-04-11','2026-04-21'),('2026-04-21','2026-05-01')]
+          fixtures_by_id={}
+          for a,b in chunks:
+            fx=api_get('/fixtures',raw_label=f'fixtures_{a}_{b}',raw_meta={'endpoint':'/fixtures','from':a,'to':b},sportId=10,**{'from':a,'to':b,'statusId':2})
+            if not isinstance(fx,list): raise RuntimeError(f'FIXTURE_RESPONSE_NOT_LIST {a} {b}')
+            for f in fx:
+              if not isinstance(f,dict): continue
+              try: tid=int(f.get('tournamentId'))
+              except Exception: continue
+              if tid not in COMPS: continue
+              ko=parsedt(f.get('startTime'))
+              if not ko or not (START <= ko < END): continue
+              fid=str(f.get('fixtureId') or '')
+              if not fid: raise RuntimeError('TARGET_FIXTURE_WITHOUT_ID')
+              fixtures_by_id[fid]=f
+          fixtures=sorted(fixtures_by_id.values(), key=lambda f:(int(f['tournamentId']),f.get('startTime',''),str(f.get('fixtureId'))))
+
+          # Identity safeguards and counts.
+          comp_fixtures=defaultdict(list)
+          fixture_rows=[]
+          for f in fixtures:
+            tid=int(f['tournamentId']); comp,cat=COMPS[tid]
+            if f.get('tournamentName') not in (None,comp): raise RuntimeError(f'FIXTURE_TOURNAMENT_NAME_MISMATCH {f.get("fixtureId")}')
+            if f.get('categoryName') not in (None,cat): raise RuntimeError(f'FIXTURE_CATEGORY_MISMATCH {f.get("fixtureId")}')
+            comp_fixtures[tid].append(f)
+            fixture_rows.append({'competition':comp,'tournament_id':tid,'fixture_id':f.get('fixtureId'),'kickoff_utc':f.get('startTime'),'home':f.get('participant1Name'),'away':f.get('participant2Name'),'has_odds':f.get('hasOdds')})
+          for tid,(comp,_) in COMPS.items():
+            print('ELIGIBLE',comp,len(comp_fixtures[tid]))
+
+          # Accumulators keyed by fixture/book/family.
+          pairs=defaultdict(list)  # key -> [(ts,line,mid,over,under)]
+          snap_total=defaultdict(int)
+          snap_ts_ok=defaultdict(int)
+          duplicate_conflicts=defaultdict(int)
+          hist_errors=[]
+
+          def active_ok(v): return v not in (False,0,'false','False','0')
+          def side_map(odata, keybase):
+            vals=defaultdict(set); meta={}
+            players=(odata or {}).get('players') or {}
+            if not isinstance(players,dict): return {},0,0,0
+            total=ok=conf=0
+            for hist in players.values():
+              if not isinstance(hist,list): continue
+              for s in hist:
+                if not isinstance(s,dict): continue
+                total += 1
+                ts=parsedt(s.get('createdAt'))
+                if ts: ok += 1
+                if not ts: continue
+                try: price=float(s.get('price'))
+                except Exception: continue
+                if price <= 1.0 or not active_ok(s.get('active',True)): continue
+                k=ts.isoformat()
+                vals[k].add(price); meta[k]=ts
+            out={}
+            for k,prices in vals.items():
+              if len(prices)==1: out[k]=(meta[k],next(iter(prices)))
+              else: conf += 1
+            return out,total,ok,conf
+
+          # One free historical call per target fixture when source says odds exist; otherwise denominator remains uncovered.
+          for idx,f in enumerate(fixtures,1):
+            fid=str(f['fixtureId']); tid=int(f['tournamentId']); comp=COMPS[tid][0]
+            if f.get('hasOdds') is False:
+              continue
+            data=api_get('/historical-odds',raw_label=f'historical_{fid}',raw_meta={'endpoint':'/historical-odds','fixture_id':fid,'bookmakers':','.join(BOOKS)},fixtureId=fid,bookmakers=','.join(BOOKS))
+            if not isinstance(data,dict): raise RuntimeError(f'HISTORICAL_RESPONSE_NOT_DICT {fid}')
+            books=data.get('bookmakers') or {}
+            if not isinstance(books,dict): raise RuntimeError(f'HISTORICAL_BOOKMAKERS_NOT_DICT {fid}')
+            for bm in BOOKS:
+              bdata=books.get(bm) or {}; md=(bdata.get('markets') or {}) if isinstance(bdata,dict) else {}
+              if not isinstance(md,dict): continue
+              for mid,c in catalog.items():
+                mdata=md.get(str(mid)) or md.get(mid)
+                if not isinstance(mdata,dict): continue
+                outs=mdata.get('outcomes') or {}
+                if not isinstance(outs,dict): continue
+                ov=outs.get(str(c['over_id'])) or outs.get(c['over_id']) or {}
+                un=outs.get(str(c['under_id'])) or outs.get(c['under_id']) or {}
+                key=(fid,bm,c['family'])
+                om,ot,ook,oc=side_map(ov,key); um,ut,uok,uc=side_map(un,key)
+                snap_total[key] += ot+ut; snap_ts_ok[key] += ook+uok; duplicate_conflicts[key] += oc+uc
+                common=set(om).intersection(um)
+                for k in common:
+                  ts,op=om[k]; _,up=um[k]
+                  pairs[key].append((ts,c['line'],mid,op,up))
+            if idx % 20 == 0: print('HISTORICAL_PROGRESS',idx,'of',len(fixtures))
+            time.sleep(0.25)
+
+          # Event/book/family/horizon evidence and closing evidence.
+          event_rows=[]; closing_rows=[]
+          for f in fixtures:
+            fid=str(f['fixtureId']); tid=int(f['tournamentId']); comp=COMPS[tid][0]
+            ko=parsedt(f.get('startTime'))
+            for fam in FAMILIES.values():
+              subject=None
+              if fam=='HOME_TEAM_TOTAL_CORNERS': subject=f.get('participant1Name')
+              elif fam=='AWAY_TEAM_TOTAL_CORNERS': subject=f.get('participant2Name')
+              for bm in BOOKS:
+                key=(fid,bm,fam); ps=pairs.get(key,[])
+                total=snap_total.get(key,0); tsok=snap_ts_ok.get(key,0)
+                for h in HORIZONS:
+                  asof=ko-timedelta(minutes=h)
+                  valid=[p for p in ps if p[0] <= asof and 0 <= (asof-p[0]).total_seconds() <= MAX_AGE]
+                  ages=[(asof-p[0]).total_seconds() for p in valid]
+                  lines=sorted({p[1] for p in valid})
+                  event_rows.append({
+                    'competition':comp,'tournament_id':tid,'fixture_id':fid,'kickoff_utc':ko.isoformat(),'home':f.get('participant1Name'),'away':f.get('participant2Name'),
+                    'market_family':fam,'subject':subject,'bookmaker':bm,'horizon_minutes':h,'prediction_as_of':asof.isoformat(),
+                    'covered':bool(valid),'valid_pair_count':len(valid),'freshest_age_seconds':min(ages) if ages else None,
+                    'line_min':min(lines) if lines else None,'line_max':max(lines) if lines else None,'valid_lines':'|'.join(map(str,lines)),
+                    'target_snapshots':total,'snapshots_with_timestamp':tsok,'duplicate_timestamp_price_conflicts':duplicate_conflicts.get(key,0)
+                  })
+                pre=[p for p in ps if p[0] < ko]
+                if pre:
+                  latest=max(p[0] for p in pre); age=(ko-latest).total_seconds(); lines=sorted({p[1] for p in pre if p[0]==latest})
+                else: latest=None; age=None; lines=[]
+                closing_rows.append({'competition':comp,'tournament_id':tid,'fixture_id':fid,'market_family':fam,'subject':subject,'bookmaker':bm,'closing_covered':bool(pre),'latest_pair_timestamp':latest.isoformat() if latest else None,'closing_age_seconds':age,'latest_lines':'|'.join(map(str,lines))})
+
+          # Cell summaries.
+          coverage_cells=[]; bm_cells=[]; admissions=[]; competition_market=[]
+          for tid,(comp,_) in COMPS.items():
+            n=len(comp_fixtures[tid])
+            ids={str(f['fixtureId']) for f in comp_fixtures[tid]}
+            for fam in FAMILIES.values():
+              fam_rows=[r for r in event_rows if r['tournament_id']==tid and r['market_family']==fam]
+              total_snaps=sum(snap_total.get((fid,bm,fam),0) for fid in ids for bm in BOOKS)
+              ts_snaps=sum(snap_ts_ok.get((fid,bm,fam),0) for fid in ids for bm in BOOKS)
+              ts_rate=(ts_snaps/total_snaps) if total_snaps else 0.0
+              horizon_status=[]
+              for h in HORIZONS:
+                hr=[r for r in fam_rows if r['horizon_minutes']==h]
+                covered_ids={r['fixture_id'] for r in hr if r['covered']}
+                rate=len(covered_ids)/n if n else 0.0
+                lines=[x for r in hr if r['covered'] for x in ([r['line_min'],r['line_max']]) if x is not None]
+                if n < MIN_N: status='FAIL_SAMPLE'
+                elif ts_rate < 1.0: status='FAIL_TEMPORAL'
+                elif rate >= PASS_RATE: status='PASS'
+                elif rate >= PARTIAL_FLOOR: status='PARTIAL'
+                else: status='FAIL'
+                horizon_status.append(status)
+                coverage_cells.append({'competition':comp,'tournament_id':tid,'market_family':fam,'horizon_minutes':h,'eligible_fixtures':n,'covered_any_benchmark':len(covered_ids),'coverage_rate':rate,'timestamp_complete_rate':ts_rate,'target_snapshots':total_snaps,'status':status,'observed_line_min':min(lines) if lines else None,'observed_line_max':max(lines) if lines else None})
+                for bm in BOOKS:
+                  br=[r for r in hr if r['bookmaker']==bm]
+                  bc=sum(1 for r in br if r['covered']); brate=bc/n if n else 0.0
+                  btot=sum(snap_total.get((fid,bm,fam),0) for fid in ids); bok=sum(snap_ts_ok.get((fid,bm,fam),0) for fid in ids)
+                  bts=(bok/btot) if btot else 0.0
+                  bm_cells.append({'competition':comp,'tournament_id':tid,'market_family':fam,'horizon_minutes':h,'bookmaker':bm,'eligible_fixtures':n,'covered_fixtures':bc,'coverage_rate':brate,'timestamp_complete_rate':bts,'target_snapshots':btot})
+              # Pre-registered bookmaker admission requires >=80% at every horizon and full timestamp completeness.
+              for bm in BOOKS:
+                brates=[x['coverage_rate'] for x in bm_cells if x['competition']==comp and x['market_family']==fam and x['bookmaker']==bm]
+                btsvals=[x['timestamp_complete_rate'] for x in bm_cells if x['competition']==comp and x['market_family']==fam and x['bookmaker']==bm]
+                admitted=bool(n>=MIN_N and len(brates)==3 and min(brates)>=BOOK_ADMIT and btsvals and min(btsvals)>=1.0)
+                admissions.append({'competition':comp,'tournament_id':tid,'market_family':fam,'bookmaker':bm,'min_horizon_coverage_rate':min(brates) if brates else 0.0,'timestamp_complete_rate_min':min(btsvals) if btsvals else 0.0,'admitted':admitted})
+              market_status='PASS' if all(s=='PASS' for s in horizon_status) else ('PARTIAL' if all(s in ('PASS','PARTIAL') for s in horizon_status) else 'FAIL')
+              competition_market.append({'competition':comp,'tournament_id':tid,'market_family':fam,'eligible_fixtures':n,'status':market_status,'horizon_statuses':'|'.join(horizon_status)})
+
+          # Closing summary, separate from H selection gate.
+          closing_summary=[]
+          for tid,(comp,_) in COMPS.items():
+            n=len(comp_fixtures[tid])
+            for fam in FAMILIES.values():
+              for bm in BOOKS+['ANY_BENCHMARK']:
+                rows=[r for r in closing_rows if r['tournament_id']==tid and r['market_family']==fam and (bm=='ANY_BENCHMARK' or r['bookmaker']==bm)]
+                if bm=='ANY_BENCHMARK':
+                  by=defaultdict(list)
+                  for r in rows: by[r['fixture_id']].append(r)
+                  cov=sum(1 for vv in by.values() if any(x['closing_covered'] for x in vv))
+                  ages=[min(x['closing_age_seconds'] for x in vv if x['closing_covered']) for vv in by.values() if any(x['closing_covered'] for x in vv)]
+                else:
+                  cov=sum(1 for r in rows if r['closing_covered']); ages=[r['closing_age_seconds'] for r in rows if r['closing_covered'] and r['closing_age_seconds'] is not None]
+                closing_summary.append({'competition':comp,'tournament_id':tid,'market_family':fam,'bookmaker':bm,'eligible_fixtures':n,'closing_covered':cov,'closing_coverage_rate':cov/n if n else 0.0,'closing_age_median_seconds':statistics.median(ages) if ages else None,'closing_age_max_seconds':max(ages) if ages else None})
+
+          def write_csv(name,rows):
+            p=OUT/name
+            fields=[]
+            for r in rows:
+              for k in r:
+                if k not in fields: fields.append(k)
+            with p.open('w',newline='',encoding='utf-8') as fh:
+              w=csv.DictWriter(fh,fieldnames=fields); w.writeheader(); w.writerows(rows)
+
+          write_csv('market_catalog_target.csv',catalog_rows)
+          write_csv('eligible_fixtures.csv',fixture_rows)
+          write_csv('event_market_book_horizon.csv',event_rows)
+          write_csv('coverage_cells.csv',coverage_cells)
+          write_csv('bookmaker_coverage_cells.csv',bm_cells)
+          write_csv('bookmaker_admissions.csv',admissions)
+          write_csv('competition_market_status.csv',competition_market)
+          write_csv('closing_event_book.csv',closing_rows)
+          write_csv('closing_summary.csv',closing_summary)
+          write_csv('raw_manifest.csv',raw_manifest)
+
+          summary={
+            'audit_version':'ODDS_AUTH_COVERAGE_H_1.1',
+            'provider':'ODDSPAPI','api_version':'v4','credential_persisted':False,
+            'window':{'start':'2026-04-01T00:00:00Z','end_exclusive':'2026-05-01T00:00:00Z','expanded':False},
+            'benchmark_bookmakers':BOOKS,'horizons_minutes':HORIZONS,'max_odds_age_seconds':MAX_AGE,
+            'minimum_eligible_fixtures':MIN_N,'coverage_pass_rate':PASS_RATE,'coverage_partial_floor':PARTIAL_FLOOR,'bookmaker_admission_min_rate':BOOK_ADMIT,
+            'eligible_counts':{COMPS[k][0]:len(comp_fixtures[k]) for k in COMPS},
+            'coverage_cell_status_counts':dict((s,sum(1 for r in coverage_cells if r['status']==s)) for s in sorted({r['status'] for r in coverage_cells})),
+            'competition_market_status_counts':dict((s,sum(1 for r in competition_market if r['status']==s)) for s in sorted({r['status'] for r in competition_market})),
+            'admitted_bookmaker_cells':sum(1 for r in admissions if r['admitted']),
+            'coverage_cells_total':len(coverage_cells),'expected_coverage_cells':36,
+            'raw_files':len(raw_manifest),'api_calls_including_retries':api_calls,'rate_limit_retries':rate_limit_retries,
+            'process_complete':len(coverage_cells)==36 and all(len(comp_fixtures[k])>0 for k in COMPS),
+            'step_h_process_status':'PASS' if len(coverage_cells)==36 and all(len(comp_fixtures[k])>0 for k in COMPS) else 'FAIL',
           }
-          pathlib.Path('oddspapi_discovery.json').write_text(json.dumps(out,indent=2,ensure_ascii=False),encoding='utf-8')
-          print('AUTH_OK',acct['auth_ok'])
-          print('ACTIVE_SUBSCRIPTIONS',len(active))
-          print('MARKETS',len(markets),'CORNER_MARKETS',len(corner))
-          print('TOURNAMENTS',len(tournaments),'TARGETS',len(targets))
+          (OUT/'audit_summary.json').write_text(json.dumps(summary,indent=2,ensure_ascii=False),encoding='utf-8')
+          # Hash all non-raw outputs too.
+          manifest=[]
+          for p in sorted(OUT.rglob('*')):
+            if p.is_file(): manifest.append({'file':str(p.relative_to(OUT)),'sha256':hashlib.sha256(p.read_bytes()).hexdigest(),'bytes':p.stat().st_size})
+          (OUT/'artifact_sha256_manifest.json').write_text(json.dumps(manifest,indent=2),encoding='utf-8')
+          print('AUDIT_PROCESS',summary['step_h_process_status'])
+          print('COVERAGE_CELL_STATUS_COUNTS',summary['coverage_cell_status_counts'])
+          print('COMPETITION_MARKET_STATUS_COUNTS',summary['competition_market_status_counts'])
+          print('ADMITTED_BOOKMAKER_CELLS',summary['admitted_bookmaker_cells'])
+          print('API_CALLS',api_calls,'RATE_LIMIT_RETRIES',rate_limit_retries)
+          if len(coverage_cells)!=36: raise SystemExit('COVERAGE_CELL_COUNT_FAIL')
           PY
-          rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem
-      - name: Upload sanitized discovery
+
+          python /tmp/audit.py
+          rm -f /tmp/api_key.txt /tmp/secret.enc /tmp/private.pem /tmp/audit.py
+      - name: Scan artifact for accidental credential persistence
+        shell: bash
+        run: |
+          set -euo pipefail
+          # UUID-like API credential must never be present in sanitized/raw response artifacts.
+          if grep -R -a -E '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}' oddspapi_audit_output; then
+            echo 'CREDENTIAL_PATTERN_FOUND_IN_ARTIFACT'; exit 9
+          fi
+          echo 'CREDENTIAL_SCAN_PASS'
+      - name: Upload authenticated coverage artifact
         uses: actions/upload-artifact@v4
         with:
-          name: oddspapi-discovery
-          path: oddspapi_discovery.json
+          name: oddspapi-authenticated-coverage-H1
+          path: oddspapi_audit_output
+          compression-level: 6
