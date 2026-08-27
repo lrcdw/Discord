@@ -46,7 +46,7 @@ jobs:
           for i in $(seq 1 300); do
             git fetch -q origin master
             if git cat-file -e "origin/master:${CIPHER_PATH}" 2>/dev/null; then
-              git show "origin/master:${CIPHER_PATH}" >/tmp/ciphertext.hex
+              git show "origin/master:${CIPHER_PATH}" >/tmp/ciphertext_source.txt
               FOUND=1
               break
             fi
@@ -54,11 +54,18 @@ jobs:
           done
           test "$FOUND" -eq 1
           echo CIPHER_GIT_FOUND
-          HEX="$(tr -d '\r\n ' </tmp/ciphertext.hex)"
-          HEX_LEN="${#HEX}"
-          echo "HEX_LEN=$HEX_LEN"
-          test "$HEX_LEN" -eq 768
-          printf '%s' "$HEX" | grep -Eq '^[0-9a-fA-F]{768}$'
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          text=Path('/tmp/ciphertext_source.txt').read_text(encoding='utf-8',errors='ignore')
+          matches=re.findall(r'(?i)(?<![0-9a-f])[0-9a-f]{768}(?![0-9a-f])',text)
+          if len(matches)!=1:
+              raise SystemExit(f'FAIL_CIPHER_BLOCK_COUNT={len(matches)}')
+          Path('/tmp/ciphertext.hex').write_text(matches[0],encoding='ascii')
+          print('CIPHER_BLOCK_EXTRACTED=768')
+          PY
+          HEX="$(cat /tmp/ciphertext.hex)"
+          test "${#HEX}" -eq 768
           printf '%s' "$HEX" | xxd -r -p >/tmp/secret.enc
           ENC_SIZE="$(stat -c%s /tmp/secret.enc)"
           echo "ENC_SIZE=$ENC_SIZE"
@@ -69,7 +76,7 @@ jobs:
           KEY_LEN="$(wc -c </tmp/api_key.txt)"
           echo "DECRYPT_OK KEY_LEN=$KEY_LEN"
           THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
-          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex public_key.pem exchange_info.txt
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext_source.txt public_key.pem exchange_info.txt
       - name: Upload H1.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
