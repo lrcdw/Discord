@@ -1,0 +1,32 @@
+{
+  "amendment_version": "THEODDSAPI_H_1.4_PREHOLDOUT_AMENDMENT_1.1",
+  "parent_protocol": "THEODDSAPI_H_1.4_PRE_REGISTERED",
+  "parent_protocol_commit": "3db986b2c8c92124fa923ac9cec68fc01c59bf33",
+  "created_date": "2026-08-27",
+  "reason": "Replace registry-only bookmaker candidates with an automatic evidence-based selection from current-market discovery before any February 2026 historical holdout data was observed.",
+  "historical_holdout_observed_before_amendment": false,
+  "discovery_selection_file": "h14/current_discovery_selection_v1_1.json",
+  "discovery_selection_commit": "177559b62ef3efcc9d47d11284acbc808862452b",
+  "changed_fields_only": {
+    "candidate_bookmakers.selection_basis": "Automatic ranking from non-holdout current-market discovery using breadth, event presence and paired half-point lines.",
+    "candidate_bookmakers.keys": ["pinnacle", "betmgm", "draftkings", "betrivers", "espnbet", "leovegas", "fanduel", "ballybet", "betfair_ex_uk", "bovada"]
+  },
+  "explicitly_unchanged": [
+    "holdout period 2026-02-01 through 2026-02-28",
+    "179-fixture independent denominator and competition inclusion",
+    "TOTAL_CORNERS, HOME_TEAM_TOTAL_CORNERS, AWAY_TEAM_TOTAL_CORNERS",
+    "FULL_MATCH pregame half-point contract",
+    "T-60, T-30, T-15 horizons",
+    "max_odds_age_seconds=300",
+    "coverage PASS >=0.90",
+    "coverage PARTIAL floor >=0.70",
+    "bookmaker admission >=0.80 across all horizons",
+    "timestamp completeness=1.0",
+    "cross-book pairing prohibited",
+    "cross-line pairing prohibited",
+    "future snapshot prohibited",
+    "no bookmaker substitution after historical holdout observation",
+    "H final pass and Step I promotion rules"
+  ],
+  "status": "FROZEN_BEFORE_HISTORICAL_HOLDOUT"
+}
