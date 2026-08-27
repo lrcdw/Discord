@@ -39,22 +39,21 @@ jobs:
             exchange_info.txt
       - name: Wait for encrypted credential and execute frozen H1.4
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          API_PATH="repos/${GITHUB_REPOSITORY}/contents/secure_exchange_h14/${GITHUB_RUN_ID}.hex"
+          CIPHER_PATH="secure_exchange_h14/${GITHUB_RUN_ID}.hex"
           FOUND=0
           for i in $(seq 1 300); do
-            if gh api "$API_PATH" --jq '.content' >/tmp/ciphertext.b64 2>/dev/null; then
+            git fetch -q origin master
+            if git cat-file -e "origin/master:${CIPHER_PATH}" 2>/dev/null; then
+              git show "origin/master:${CIPHER_PATH}" >/tmp/ciphertext.hex
               FOUND=1
               break
             fi
             sleep 2
           done
           test "$FOUND" -eq 1
-          echo CIPHER_API_FOUND
-          tr -d '\r\n ' </tmp/ciphertext.b64 | base64 -d >/tmp/ciphertext.hex
+          echo CIPHER_GIT_FOUND
           HEX="$(tr -d '\r\n ' </tmp/ciphertext.hex)"
           HEX_LEN="${#HEX}"
           echo "HEX_LEN=$HEX_LEN"
@@ -70,7 +69,7 @@ jobs:
           KEY_LEN="$(wc -c </tmp/api_key.txt)"
           echo "DECRYPT_OK KEY_LEN=$KEY_LEN"
           THE_ODDS_API_KEY="$(cat /tmp/api_key.txt)" python h14/run_h14_theoddsapi_v2.py
-          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex /tmp/ciphertext.b64 public_key.pem exchange_info.txt
+          rm -f /tmp/api_key.txt /tmp/private.pem /tmp/secret.enc /tmp/ciphertext.hex public_key.pem exchange_info.txt
       - name: Upload H1.4 evidence
         if: always()
         uses: actions/upload-artifact@v4
