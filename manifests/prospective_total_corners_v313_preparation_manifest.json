@@ -1,0 +1,48 @@
+{
+  "manifest_version": "PROSPECTIVE_TOTAL_CORNERS_V313_PREPARATION_1.0",
+  "created_at_utc": "2026-09-01T14:00:50Z",
+  "parent_checkpoint": "CORNERS-LAB-V3.1.2-FINAL-20260831-001",
+  "protocol_version": "ODDS_PROSPECTIVE_V3_1_3_TOTAL_CORNERS",
+  "state": "PREPARED_NOT_ACTIVATED_NO_COHORT",
+  "operating_mode": "SHADOW",
+  "network_calls_executed": 0,
+  "credits_consumed": 0,
+  "step_i_allowed": false,
+  "artifact_sha256": {
+    "config/odds_prospective_protocol_v3_1_3_total_corners.json": "c7ee0b90a36de0514ce625e57f7d0ce0b048033283dde178325c38a7fa421422",
+    "code/prospective_total_corners_v313.py": "4bb3660ea3838c78b9513b5c82f3da9b4622e33930b934c8b55b54597c404168",
+    "code/run_cloud_window_v313.py": "629b756c817b4596ed806b8667f975acc702c29fcfb9073dc4ecdc2a7d70d79f",
+    ".github/workflows/v313-prospective-total-corners-prepared.yml": "51371214a2c146f5d44b3fe3f852a9e99cb1a6166b1bfded9e52c4758d92d759",
+    ".github/workflows/v31-prospective-total-corners.yml": "0b46f8c78532e40084e2c4c17a9cc34b88709e46af9ef2b2955982b91674f18a",
+    "tests/test_v313_bookmaker_quarantine.py": "639f35173acee4ebaf3f82017f8397644a0b6ac3af02aeeabc03e9b4d425f9f1",
+    "tests/test_v31_prospective_collector.py": "09f0af9067d46f03b451ef770c23d7d30689cac5d651b3f2d6e65c8f3a7e97ef",
+    "reports/prospective_total_corners_v313_v312_replay.json": "527286f7b0196265c5c8bcc22b5b3850cf0a75511cffa62e64c3758e370271cc",
+    "reports/prospective_total_corners_v313_preparation.md": "42b5bad1aa30f090037e9f0bca46429683650c6827b34e446c2b7ceb97568b1e"
+  },
+  "diagnostic_replay": {
+    "evidence_role": "ENGINEERING_REPLAY_ONLY",
+    "systemic_integrity_status": "PASS",
+    "bookmaker_quality_status": "FAIL_QUARANTINED",
+    "bookmaker_quality_issue_count": 223,
+    "fresh_conflicting_duplicate_count": 219,
+    "stale_timestamp_count": 4,
+    "quarantined_bookmaker_snapshot_count": 17,
+    "covered_cells": 21,
+    "uncovered_cells": 99,
+    "can_prove_market_coverage": false,
+    "can_promote_step_h": false
+  },
+  "verification": {
+    "tests": "112 passed, 0 failed",
+    "thresholds_changed": false,
+    "closed_v312_hashes_unchanged": true,
+    "old_workflow_scheduled": false,
+    "new_workflow_scheduled": false,
+    "new_workflow_activation_guards": true
+  },
+  "remaining_authorizations": [
+    "public repository publication",
+    "new API-key use window",
+    "new cohort activation"
+  ]
+}

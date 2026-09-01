@@ -1,0 +1,42 @@
+name: Activate v3.1.3 TOTAL_CORNERS cohort
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v313-prospective-total-corners
+  cancel-in-progress: false
+
+jobs:
+  activate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Freeze denominator after free quota preflight
+        env:
+          THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
+        run: python code/activate_v313.py
+      - name: Verify activation artifacts
+        run: |
+          python -m compileall -q code
+          python -c "import sys; sys.path.insert(0, 'code'); from prospective_total_corners_v313 import load_protocol; assert load_protocol()['no_cost_control']['minimum_quota_reserve'] == 150"
+          python code/sync_prospective_state_v31.py \
+            --active registries/prospective_active_cohort_v313.json \
+            --collections raw/prospective_v3_1_3/collections
+      - name: Publish the frozen active cohort
+        run: |
+          set -euo pipefail
+          git config user.name "corners-lab-shadow"
+          git config user.email "corners-lab-shadow@users.noreply.github.com"
+          git add registries/prospective_active_cohort_v313.json raw/prospective_v3_1_3/cohorts
+          git commit -m "Activate v3.1.3 prospective TOTAL_CORNERS cohort"
+          git push origin HEAD:master

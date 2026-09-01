@@ -1,0 +1,21 @@
+{
+  "manifest_version": "PROSPECTIVE_TOTAL_CORNERS_V313_ACTIVATION_1.0",
+  "created_at_utc": "2026-09-01T15:04:58Z",
+  "state": "AUTHORIZED_PENDING_REMOTE_ACTIVATION",
+  "repository": "lrcdw/Discord",
+  "protocol_version": "ODDS_PROSPECTIVE_V3_1_3A_ACTIVATED_TOTAL_CORNERS",
+  "minimum_quota_reserve": 150,
+  "api_key_authorized_through_utc": "2026-09-08T02:59:59Z",
+  "thresholds_changed": false,
+  "target_odds_observed": false,
+  "artifacts": {
+    "config/odds_prospective_protocol_v3_1_3_total_corners.json": "c7ee0b90a36de0514ce625e57f7d0ce0b048033283dde178325c38a7fa421422",
+    "config/odds_prospective_protocol_v3_1_3a_activation.json": "1d261a5d18a4a46d5d20aedabbba1ffd30c3c6cc962e2c294bbe805b31570d79",
+    "code/prospective_total_corners_v313.py": "a33dfa4f63de6b6bdf02241c0729a41033af0071cbcca961feb551b4ed1c889b",
+    "code/activate_v313.py": "70a09cab202643f5c0fffc5aadfb8fd01ae671f691ec72c0795f1a7a17aef2f4",
+    "code/run_cloud_window_v313.py": "7960fe1131d548aab99c48b9ad82290d2e0920bf481c455d26fbcb85a48e848e",
+    ".github/workflows/v313-activate.yml": "e2e426d9bb0f5965315a6cf9e8677043fc5798000284b3d44f2d0956d7bf1238",
+    ".github/workflows/v313-prospective-total-corners-prepared.yml": "4b0fe8ff08042a9a48a912bbe0a96dfb8eee3614f856ae7fa348824da078087d",
+    "reports/prospective_total_corners_v313_activation.md": "549ce540d4bbfd4f2a8187fc5c3031f3da20c476decc5f916cfdfc5b1a761c9c"
+  }
+}

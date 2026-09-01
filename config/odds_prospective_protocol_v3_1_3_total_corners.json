@@ -1,0 +1,155 @@
+{
+  "protocol_version": "ODDS_PROSPECTIVE_V3_1_3_TOTAL_CORNERS",
+  "pre_registered_at_utc": "2026-09-01T14:00:50Z",
+  "parent_protocol_version": "ODDS_PROSPECTIVE_V3_1_2D_TOTAL_CORNERS",
+  "specification_version": "PROMPT_MESTRE_3.1",
+  "operating_mode": "SHADOW",
+  "activation_state": "PREPARED_NOT_ACTIVATED_NO_COHORT",
+  "purpose": "Run a new prospective TOTAL_CORNERS cohort while quarantining ambiguous bookmaker snapshots locally and preserving systemic fail-closed integrity. This version never reinterprets or promotes v3.1.2 evidence.",
+  "change_rationale": {
+    "observed_evidence": "All 15 FanDuel bookmaker-market raws in the closed v3.1.2 cohort contained duplicate outcome keys: 256 keys had different prices at the same market timestamp. Two FanDuel snapshots were already stale under the 300-second gate, leaving 219 freshness-eligible conflicting keys in the closed audit. No provider field distinguishes which price is authoritative.",
+    "scope": "Change failure propagation only: a conflicting duplicate invalidates the entire bookmaker snapshot for that cell, but does not invalidate independent bookmaker snapshots in the same raw response.",
+    "not_changed": [
+      "operational domain",
+      "denominator rules",
+      "T-60/T-30/T-15 horizons",
+      "300-second freshness limit",
+      "coverage thresholds",
+      "bookmaker-admission threshold",
+      "minimum denominator",
+      "no-leakage controls",
+      "SHADOW restriction",
+      "free-access boundary"
+    ],
+    "closed_v312_evidence_sha256": {
+      "audit": "ff0f91b95865246c43659b0b07c11466e891576730377543949ce8ae28eff4ab",
+      "scheduler_result": "bb17edabe9d16a80185957c773bced8f551be1e6bc2be77964de511e43a3f3a6",
+      "final_summary": "eef0fbaafb81b61d2d625df1612947e054af9d94fff022bfb0e97a94cf0c18e1"
+    }
+  },
+  "domain": {
+    "operational_market": "TOTAL_CORNERS",
+    "provider_market_key": "alternate_totals_corners",
+    "period": "FULL_MATCH",
+    "pregame_only": true,
+    "half_point_lines_only": true,
+    "deferred_non_blocking_modules": [
+      "HOME_TEAM_TOTAL_CORNERS",
+      "AWAY_TEAM_TOTAL_CORNERS"
+    ]
+  },
+  "denominator": {
+    "source": "Football-Data.co.uk weekly fixture CSV",
+    "url": "https://www.football-data.co.uk/fixtures.csv",
+    "independent_of_target_corner_odds": true,
+    "first_download_only_per_cohort": true,
+    "minimum_lead_time_minutes": 90,
+    "maximum_cohort_window_days": 7,
+    "competition_codes": {
+      "E0": {"competition": "Premier League", "timezone": "Europe/London", "sport_key": "soccer_epl"},
+      "E1": {"competition": "Championship", "timezone": "Europe/London", "sport_key": "soccer_efl_champ"},
+      "D1": {"competition": "Bundesliga", "timezone": "Europe/London", "sport_key": "soccer_germany_bundesliga"},
+      "SP1": {"competition": "LaLiga", "timezone": "Europe/London", "sport_key": "soccer_spain_la_liga"}
+    },
+    "exclusion_rule": "Only rows outside the fixed competition/time window, exact duplicate rows, or rows without a parseable kickoff may be excluded; odds availability is never an exclusion reason.",
+    "minimum_completed_fixtures_per_competition_for_final_review": 25,
+    "small_cohort_rule": "Retain and accumulate every eligible fixture; do not declare final PASS or FAIL before the minimum denominator is complete."
+  },
+  "collection": {
+    "provider": "The Odds API",
+    "base_url": "https://api.the-odds-api.com/v4",
+    "api_key_environment_variable": "THE_ODDS_API_KEY",
+    "horizons_minutes": [60, 30, 15],
+    "collection_window_seconds_before_prediction_as_of": 300,
+    "max_odds_age_seconds": 300,
+    "same_bookmaker_pair_required": true,
+    "cross_book_pairing_prohibited": true,
+    "cross_line_pairing_prohibited": true,
+    "future_timestamp_prohibited": true,
+    "post_prediction_as_of_collection_prohibited": true,
+    "candidate_bookmakers": [
+      "leovegas",
+      "pinnacle",
+      "ballybet",
+      "betmgm",
+      "draftkings",
+      "espnbet",
+      "betrivers",
+      "betfair_ex_uk",
+      "fanduel",
+      "betparx"
+    ],
+    "candidate_selection_basis": "Unchanged from v3.1.2. FanDuel remains observable and is not removed after observation; ambiguous FanDuel snapshots are quarantined by the generic bookmaker-local rule.",
+    "provider_event_resolution": "Exact normalized home, away and kickoff within 15 minutes. Unresolved events remain in the denominator and are uncovered. Fuzzy resolution is prohibited.",
+    "credential_must_not_be_persisted": true,
+    "immutable_raw_and_sha256_required": true
+  },
+  "bookmaker_snapshot_quality": {
+    "unit_of_quarantine": "BOOKMAKER_FIXTURE_HORIZON_SNAPSHOT",
+    "conflicting_duplicate_rule": "If one bookmaker has more than one distinct decimal price for the same market key, half-point line, side and market last_update, quarantine that bookmaker's entire snapshot for the cell.",
+    "conflicting_duplicate_price_selection": "PROHIBITED",
+    "exact_duplicate_rule": "Byte-equivalent outcome keys with the same price may be deterministically collapsed; they do not create new information.",
+    "missing_or_invalid_market_timestamp_rule": "QUARANTINE_BOOKMAKER_SNAPSHOT",
+    "stale_or_future_market_timestamp_rule": "QUARANTINE_BOOKMAKER_SNAPSHOT",
+    "cross_book_rescue_rule": "Independent valid bookmakers in the same immutable raw remain independently evaluable; prices are never paired across bookmakers.",
+    "global_integrity_failure_scope": [
+      "raw hash mismatch",
+      "collection after prediction_as_of",
+      "collection more than 300 seconds before prediction_as_of",
+      "manifest/cohort identity inconsistency",
+      "credential leakage"
+    ],
+    "provider_quality_diagnostics_required": true
+  },
+  "scheduler": {
+    "strategy": "ONE_ATTEMPT_PER_UNIQUE_PREDICTION_AS_OF",
+    "target_seconds_before_prediction_as_of": 90,
+    "wait_poll_seconds": 30,
+    "maximum_attempts_per_unique_prediction_as_of": 1,
+    "late_start_rule": "MARK_MISSED_UNCOVERED_NO_RETRY",
+    "cross_runner_idempotency": "PERSISTED_SCHEDULED_TASK_CELL_KEYS",
+    "local_machine_allowed": false,
+    "always_on_runner_required": true
+  },
+  "no_cost_control": {
+    "paid_access_prohibited": true,
+    "event_catalogue_endpoint_cost": 0,
+    "bookmaker_count": 10,
+    "bookmaker_region_equivalents": 1,
+    "markets_per_event_request": 1,
+    "maximum_credit_cost_per_fixture_horizon_if_market_returned": 1,
+    "minimum_quota_reserve": 100,
+    "missing_quota_header_rule": "FAIL_CLOSED_BEFORE_ODDS_REQUEST",
+    "insufficient_quota_rule": "FAIL_CLOSED_BEFORE_ODDS_REQUEST",
+    "manual_paid_top_up_allowed": false
+  },
+  "gates": {
+    "coverage_pass_rate": 0.9,
+    "coverage_partial_floor": 0.7,
+    "bookmaker_admission_min_rate_across_all_horizons": 0.8,
+    "timestamp_complete_rate_required": 1.0,
+    "duplicate_same_timestamp_different_price_allowed": false,
+    "thresholds_changed": false
+  },
+  "promotion": {
+    "replay_of_pre_registration_data_role": "ENGINEERING_REPLAY_ONLY",
+    "replay_can_prove_market_coverage": false,
+    "replay_can_promote_step_h": false,
+    "step_h_during_accumulation": "OPEN_ACCUMULATING_PROSPECTIVE_EVIDENCE",
+    "step_i_allowed_during_accumulation": false,
+    "model_training_allowed": false,
+    "paper_candidate_allowed": false,
+    "live_allowed": false,
+    "final_pass_requires": "A newly frozen v3.1.3 cohort, minimum denominator in every competition, all three horizon coverage gates, at least one admitted bookmaker per competition, systemic integrity PASS and a separate formal Step H review."
+  },
+  "activation_requirements": {
+    "new_cohort_required": true,
+    "new_active_cohort_registry_required": true,
+    "always_on_execution_required": true,
+    "explicit_public_repository_publication_authorization_required": true,
+    "explicit_new_api_key_window_authorization_required": true,
+    "quota_verified_before_enrollment": true,
+    "minimum_quota_reserve_after_collection": 100,
+    "network_calls_authorized_now": false
+  }
+}

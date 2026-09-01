@@ -1,0 +1,32 @@
+{
+  "amendment_version": "ODDS_PROSPECTIVE_V3_1_3A_ACTIVATION",
+  "parent_protocol_version": "ODDS_PROSPECTIVE_V3_1_3_TOTAL_CORNERS",
+  "amended_protocol_version": "ODDS_PROSPECTIVE_V3_1_3A_ACTIVATED_TOTAL_CORNERS",
+  "authorized_at_utc": "2026-09-01T15:04:58Z",
+  "authorization_source": "explicit_user_authorization",
+  "changes": {
+    "activation_state": {
+      "old": "PREPARED_NOT_ACTIVATED_NO_COHORT",
+      "new": "AUTHORIZED_PENDING_COHORT"
+    },
+    "minimum_quota_reserve": {
+      "old": 100,
+      "new": 150,
+      "effect": "STRICTER_NO_COST_GUARD"
+    },
+    "network_calls_authorized_now": {
+      "old": false,
+      "new": true
+    }
+  },
+  "scope": {
+    "public_repository": "lrcdw/Discord",
+    "api_key_use": "current_free_endpoints_for_v3.1.3_cohort_only",
+    "authorized_through_utc": "2026-09-08T02:59:59Z",
+    "payment_or_upgrade": false,
+    "historical_endpoint": false,
+    "credential_persistence": false
+  },
+  "thresholds_changed": false,
+  "target_odds_observed_before_amendment": false
+}
