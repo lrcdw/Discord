@@ -2,6 +2,10 @@ name: Activate v3.1.3 TOTAL_CORNERS cohort
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - 'registries/v313_activation_request.json'
 
 permissions:
   contents: write

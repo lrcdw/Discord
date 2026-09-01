@@ -1,0 +1,12 @@
+{
+  "request_version": "V313_ACTIVATION_REQUEST_1.0",
+  "requested_at_utc": "2026-09-01T15:04:58Z",
+  "repository": "lrcdw/Discord",
+  "protocol_version": "ODDS_PROSPECTIVE_V3_1_3A_ACTIVATED_TOTAL_CORNERS",
+  "authorization_amendment": "ODDS_PROSPECTIVE_V3_1_3A_ACTIVATION",
+  "minimum_quota_reserve": 150,
+  "authorized_through_utc": "2026-09-08T02:59:59Z",
+  "activation_requested": true,
+  "operating_mode": "SHADOW",
+  "step_i_allowed": false
+}
