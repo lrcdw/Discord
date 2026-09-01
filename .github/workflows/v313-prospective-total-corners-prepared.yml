@@ -29,10 +29,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Require the immutable authorized cohort
+        id: active
         shell: bash
         run: |
           set -euo pipefail
-          test -f registries/prospective_active_cohort_v313.json
+          if [ ! -f registries/prospective_active_cohort_v313.json ]; then
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           python - <<'PY'
           import hashlib, json
           from datetime import datetime, timezone
@@ -48,7 +52,9 @@ jobs:
           path = active['cohort_path']
           assert hashlib.sha256(open(path, 'rb').read()).hexdigest() == active['cohort_sha256']
           PY
+          echo 'ready=true' >> "$GITHUB_OUTPUT"
       - name: Wait for and collect only due pre-registered cells
+        if: steps.active.outputs.ready == 'true'
         env:
           THE_ODDS_API_KEY: ${{ secrets.THE_ODDS_API_KEY }}
         shell: bash
@@ -59,7 +65,7 @@ jobs:
           if [ -z "$horizon" ]; then horizon=420; fi
           python code/run_cloud_window_v313.py --cohort "$cohort" --horizon-seconds "$horizon"
       - name: Synchronize and audit without changing the frozen gates
-        if: always()
+        if: always() && steps.active.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -74,7 +80,7 @@ jobs:
             --output reports/odds_prospective_v3_1_3_result.json || audit_exit=$?
           test "$audit_exit" -le 1
       - name: Persist immutable attempts before another runner starts
-        if: always()
+        if: always() && steps.active.outputs.ready == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -85,7 +91,7 @@ jobs:
           git commit -m "Persist v3.1.3 prospective SHADOW evidence"
           git push origin HEAD:master
       - name: Upload immutable snapshot evidence
-        if: always()
+        if: always() && steps.active.outputs.ready == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: v313-prospective-${{ github.run_id }}-${{ github.run_attempt }}
